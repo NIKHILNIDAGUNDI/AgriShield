@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agri-Shield: Global Food Security Forecasting Portal</title>
+  
+  <!-- FontAwesome & Outfit/Inter Google Fonts -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700;800&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  
+  <!-- ChartJS CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  
+  <!-- Custom Styling -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Model Training / Pipeline Loading Overlay -->
+  <div id="model-loader" class="model-loading">
+    <div class="spinner"></div>
+    <h2 style="font-family: var(--font-display); font-weight: 700; color: #ffffff; letter-spacing: 0.05em;">CALIBRATING MODELS</h2>
+    <p style="font-size: 0.85rem; color: var(--text-secondary); max-width: 300px; text-align: center;">
+      Running time-series feature engineering lags & training global Random Forest regressors in-browser...
+    </p>
+  </div>
+
+  <div class="container">
+
+    <!-- ==================== VIEW 1: EXECUTIVE BRIEFING PAGE ==================== -->
+    <div id="summary-page" class="view-page active">
+      <!-- Header Section -->
+      <header class="summary-header">
+        <div class="logo-section">
+          <h1><i class="fa-solid fa-shield-halved"></i> AGRI-SHIELD</h1>
+          <p>AI-Powered Global Food Security Early Warning System</p>
+        </div>
+        
+        <div class="header-right">
+          <div class="gpu-status-badge" id="gpu-status-summary" style="display: none;">
+            <i class="fa-solid fa-microchip"></i>
+            <span id="gpu-name-summary">GPU: None</span>
+          </div>
+          <div class="status-badge">
+            <div class="status-dot"></div>
+            <span>Pipeline: Calibrated</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Hero Brief Section -->
+      <section class="hero-block">
+        <div class="hero-content">
+          <h2>Predictive Intelligence Summary</h2>
+          <p>The forecasting model analyzes historical agricultural indicators at month <i>t</i> to predict food price indices and critical shortage risk scores 3 months in advance. Select a region below to generate a tailored report card.</p>
+        </div>
+      </section>
+
+
+      <!-- Custom Region Input -->
+      <section class="custom-region-block" style="margin-bottom: 2rem;">
+        <div class="glass-panel" style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; background: var(--panel-bg); backdrop-filter: blur(16px); border: 1px solid var(--panel-border); border-radius: 18px; box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.25);">
+          <h3 style="font-family: var(--font-display); font-weight: 700; color: #ffffff; font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem; margin: 0;">
+            <i class="fa-solid fa-earth-americas" style="color: #00f2fe; text-shadow: 0 0 8px rgba(0, 242, 254, 0.4);"></i> Analyze a Custom Region
+          </h3>
+          <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0;">
+            Enter any global city, region, or country. Agri-Shield will geocode the location, fetch live historical climatology and macroeconomic inflation indices, recalibrate the forecasting models, and generate predictive risk analysis.
+          </p>
+          <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+            <div style="position: relative; flex: 1; min-width: 250px;">
+              <i class="fa-solid fa-magnifying-glass" style="position: absolute; left: 1.5rem; top: 50%; transform: translateY(-50%); color: var(--text-muted);"></i>
+              <input type="text" id="input-custom-region" placeholder="e.g., Spain, Brazil, Kenya, Tokyo..." style="width: 100%; padding: 0.75rem 1rem 0.75rem 3rem; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; color: #ffffff; font-family: var(--font-body); font-size: 0.9rem; outline: none; transition: all 0.3s ease;">
+            </div>
+            <button class="terminal-btn glow-purple" id="btn-fetch-custom-region" style="padding: 0.75rem 1.5rem; font-family: var(--font-display); font-weight: 600; display: flex; align-items: center; gap: 0.5rem; cursor: pointer; border-radius: 8px; border: none; background: linear-gradient(135deg, #8b5cf6, #ec4899); color: white; transition: all 0.3s ease;">
+              <i class="fa-solid fa-cloud-arrow-down"></i> Fetch & Run Forecast
+            </button>
+          </div>
+          <div id="custom-region-status" style="font-size: 0.8rem; color: #cbd5e1; display: none; align-items: center; gap: 0.5rem;">
+            <div class="small-spinner"></div>
+            <span id="custom-region-status-text">Geocoding region...</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Region Overview Grid -->
+      <section class="overview-grid">
+        <!-- US Overview Card -->
+        <div class="overview-card active" id="overview-card-us" data-region="US">
+          <div class="card-border-glow"></div>
+          <div class="card-main">
+            <div class="card-head">
+              <h3><i class="fa-solid fa-flag-usa"></i> United States</h3>
+              <span class="status-badge-mini risk-low">SECURE</span>
+            </div>
+            <div class="card-body">
+              <div class="overview-metric">
+                <span class="metric-lbl">Shortage Risk (Mar 26):</span>
+                <span class="metric-val text-emerald" id="sum-risk-us">5.0%</span>
+              </div>
+              <div class="overview-metric">
+                <span class="metric-lbl">Price Index (Mar 26):</span>
+                <span class="metric-val text-cyan" id="sum-price-us">114.4</span>
+              </div>
+            </div>
+            <div class="card-foot">
+              <i class="fa-solid fa-shield-check"></i> Low vulnerability detected
+            </div>
+          </div>
+        </div>
+
+        <!-- Ukraine Overview Card -->
+        <div class="overview-card" id="overview-card-ukraine" data-region="Ukraine">
+          <div class="card-border-glow"></div>
+          <div class="card-main">
+            <div class="card-head">
+              <h3><i class="fa-solid fa-circle-info"></i> Ukraine</h3>
+              <span class="status-badge-mini risk-medium">CAUTION</span>
+            </div>
+            <div class="card-body">
+              <div class="overview-metric">
+                <span class="metric-lbl">Shortage Risk (Mar 26):</span>
+                <span class="metric-val text-amber" id="sum-risk-ukraine">30.0%</span>
+              </div>
+              <div class="overview-metric">
+                <span class="metric-lbl">Price Index (Mar 26):</span>
+                <span class="metric-val text-cyan" id="sum-price-ukraine">198.6</span>
+              </div>
+            </div>
+            <div class="card-foot">
+              <i class="fa-solid fa-triangle-exclamation text-amber"></i> Geopolitical strain active
+            </div>
+          </div>
+        </div>
+
+        <!-- India Overview Card -->
+        <div class="overview-card" id="overview-card-india" data-region="India">
+          <div class="card-border-glow"></div>
+          <div class="card-main">
+            <div class="card-head">
+              <h3><i class="fa-solid fa-wheat-awn"></i> India</h3>
+              <span class="status-badge-mini risk-medium-high">WARNING</span>
+            </div>
+            <div class="card-body">
+              <div class="overview-metric">
+                <span class="metric-lbl">Shortage Risk (Mar 26):</span>
+                <span class="metric-val text-rose" id="sum-risk-india">35.3%</span>
+              </div>
+              <div class="overview-metric">
+                <span class="metric-lbl">Price Index (Mar 26):</span>
+                <span class="metric-val text-cyan" id="sum-price-india">142.6</span>
+              </div>
+            </div>
+            <div class="card-foot">
+              <i class="fa-solid fa-circle-xmark text-rose"></i> Late-season crop risks detected
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- AI Console Terminal for generating summaries -->
+      <section class="console-block">
+        <div class="glass-panel terminal-window">
+          <div class="terminal-head">
+            <div class="window-controls">
+              <span class="dot red"></span>
+              <span class="dot yellow"></span>
+              <span class="dot green"></span>
+            </div>
+            <span class="terminal-title">AGRI-SHIELD COGNITIVE ANALYSIS TERMINAL</span>
+            <span class="terminal-model" id="terminal-model-name">Model: RF regressor (in-browser)</span>
+          </div>
+          <div class="terminal-body">
+            <div class="terminal-toolbar">
+              <button class="terminal-btn glow-purple" id="btn-generate-summary">
+                <i class="fa-solid fa-bolt"></i> Generate Predictive Summary
+              </button>
+              <div class="terminal-loader" id="briefing-loader" style="display: none;">
+                <div class="small-spinner"></div>
+                <span>Parsing 3-month lead matrices...</span>
+              </div>
+            </div>
+            <div class="terminal-output" id="briefing-text-container">
+              <span class="terminal-prompt">> Ready for analysis. Select a region card above and press 'Generate Predictive Summary' to run deep sequence analysis.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Explore More Navigation Button -->
+      <section class="nav-block">
+        <button class="glowing-cta-btn" id="btn-show-analytics">
+          Explore Detailed Analytics & Policy Simulator <i class="fa-solid fa-arrow-right"></i>
+        </button>
+      </section>
+    </div>
+
+    <!-- ==================== VIEW 2: DETAILED ANALYTICS PAGE ==================== -->
+    <div id="analytics-page" class="view-page">
+      
+      <!-- Back navigation button bar -->
+      <div class="back-bar">
+        <button class="back-btn" id="btn-back-to-summary">
+          <i class="fa-solid fa-arrow-left"></i> Return to Intelligence Summary
+        </button>
+        <div class="page-title-badge">DETAILED ANALYTICS CENTER</div>
+      </div>
+
+      <!-- Header Section -->
+      <header id="main-header">
+        <div class="logo-section">
+          <h1 id="app-title"><i class="fa-solid fa-shield-halved"></i> AGRI-SHIELD</h1>
+          <p id="app-subtitle">AI-Powered Global Food Security Early Warning System</p>
+        </div>
+        
+        <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+          <div class="region-tabs" id="region-selector" role="tablist" style="margin-bottom: 0;">
+            <button class="tab-btn active" id="tab-us" data-region="US" role="tab" aria-selected="true"><i class="fa-solid fa-flag-usa"></i> United States</button>
+            <button class="tab-btn" id="tab-ukraine" data-region="Ukraine" role="tab" aria-selected="false"><i class="fa-solid fa-circle-info"></i> Ukraine</button>
+            <button class="tab-btn" id="tab-india" data-region="India" role="tab" aria-selected="false"><i class="fa-solid fa-wheat-awn"></i> India</button>
+          </div>
+          
+          <div class="model-toggle-container" id="model-backend-selector" style="display: none;">
+            <button class="toggle-btn active" id="toggle-rf" data-model="RF" title="Standard Random Forest Model">Standard AI</button>
+            <button class="toggle-btn" id="toggle-torch" data-model="Torch" title="Deep Learning PyTorch Model (runs on RTX GPU)">Advanced AI (Neural Net)</button>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+          <div class="gpu-status-badge" id="gpu-status" style="display: none;">
+            <i class="fa-solid fa-microchip"></i>
+            <span id="gpu-name">GPU: None</span>
+          </div>
+          <div class="status-badge" id="system-status">
+            <div class="status-dot"></div>
+            <span>Pipeline: Calibrated</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Key Performance Indicators (KPI) Grid -->
+      <section class="dashboard-grid-4" aria-label="Key Performance Indicators">
+        
+        <!-- KPI 1: Supply Shortage Risk circular gauge -->
+        <div class="glass-panel kpi-card" id="kpi-card-risk">
+          <div class="kpi-info" style="flex: 1;">
+            <h3>Supply Shortage Risk</h3>
+            <div class="kpi-value" id="kpi-val-risk">5.0%</div>
+            <div class="kpi-sub" id="kpi-sub-risk">
+              <i class="fa-solid fa-shield-check"></i>
+              <span>Supply Line: Secure</span>
+            </div>
+          </div>
+          
+          <!-- Circular Progress SVG Ring -->
+          <div class="circular-progress">
+            <svg width="80" height="80">
+              <circle class="bg" cx="40" cy="40" r="36"></circle>
+              <circle class="fill" id="gauge-fill-risk" cx="40" cy="40" r="36" style="stroke-dasharray: 226; stroke-dashoffset: 226;"></circle>
+            </svg>
+            <div class="number" id="gauge-txt-risk">5%</div>
+          </div>
+        </div>
+
+        <!-- KPI 2: Commodity Price Index -->
+        <div class="glass-panel kpi-card cyan" id="kpi-card-price">
+          <div class="kpi-info">
+            <h3>Food Price Level</h3>
+            <div class="kpi-value" id="kpi-val-price">102.3</div>
+            <div class="kpi-sub" id="kpi-sub-price">
+              <i class="fa-solid fa-arrow-trend-up"></i>
+              <span>+0.25% MoM change</span>
+            </div>
+          </div>
+          <div class="kpi-icon-wrapper">
+            <i class="fa-solid fa-seedling"></i>
+          </div>
+        </div>
+
+        <!-- KPI 3: Vegetation Health Index -->
+        <div class="glass-panel kpi-card emerald" id="kpi-card-yield">
+          <div class="kpi-info">
+            <h3>Crop Harvest Density</h3>
+            <div class="kpi-value" id="kpi-val-yield">98.5%</div>
+            <div class="kpi-sub" id="kpi-sub-yield">
+              <i class="fa-solid fa-circle-check"></i>
+              <span>Optimal vegetative density</span>
+            </div>
+          </div>
+          <div class="kpi-icon-wrapper">
+            <i class="fa-solid fa-wheat-awn"></i>
+          </div>
+        </div>
+
+        <!-- KPI 4: Macro & Logistics Index -->
+        <div class="glass-panel kpi-card amber" id="kpi-card-logistic">
+          <div class="kpi-info">
+            <h3>Shipping & Fuel Costs</h3>
+            <div class="kpi-value" id="kpi-val-logistic">1.34</div>
+            <div class="kpi-sub" id="kpi-sub-logistic">
+              <i class="fa-solid fa-truck"></i>
+              <span>Oil: $65/bbl | Inf: 2.5%</span>
+            </div>
+          </div>
+          <div class="kpi-icon-wrapper">
+            <i class="fa-solid fa-truck-ramp-box"></i>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- Deep Learning Local Setup / Guide Warning (Hidden once trained) -->
+      <section class="glass-panel" id="dl-uninitialized-card" style="margin-bottom: 2rem;">
+        <div style="display: flex; align-items: center; gap: 1.5rem; justify-content: space-between; flex-wrap: wrap;">
+          <div style="flex: 1; min-width: 300px;">
+            <h3 style="font-family: var(--font-display); font-weight: 700; color: #ffffff; font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+              <i class="fa-solid fa-bolt" style="color: #a78bfa; text-shadow: 0 0 8px rgba(139, 92, 246, 0.4);"></i> Optimize Forecasting with PyTorch Deep Learning
+            </h3>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); max-width: 850px;">
+              You can train a PyTorch Neural Network forecasting model locally on your NVIDIA GeForce RTX GPU. 
+              Run the batch training script <strong><a href="file:///C:/Users/nikhi/AppData/Local/agy/bin/2/dashboard_v2/train_model.bat" style="color: #00f2fe; text-decoration: underline;">[train_model.bat]</a></strong> 
+              to execute the CUDA-accelerated model and generate comparative loss curves.
+            </p>
+          </div>
+          <div style="background: rgba(139, 92, 246, 0.05); border: 1px dashed rgba(139, 92, 246, 0.2); padding: 0.65rem 1.25rem; border-radius: 8px; font-family: monospace; font-size: 0.75rem; color: #a78bfa; display: flex; align-items: center; gap: 0.5rem;">
+            <i class="fa-solid fa-terminal"></i> uv run train_deep_learning.py
+          </div>
+        </div>
+      </section>
+
+      <!-- Main Charts Row -->
+      <section class="dashboard-grid-2" aria-label="Forecasting Charts">
+        
+        <!-- Chart A: Historical & Predicted Price Index -->
+        <div class="glass-panel" id="price-chart-panel">
+          <div class="panel-header">
+            <h2><i class="fa-solid fa-chart-area"></i> Food Price Trends & Predictions (3 Months in Advance)</h2>
+            <span style="font-size: 0.8rem; color: var(--text-secondary);" id="price-chart-legend">Forecast Window: Jan 2025 - Mar 2026</span>
+          </div>
+          <div class="chart-wrapper">
+            <canvas id="priceChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Chart B: Contributing Factors (Feature Importance) -->
+        <div class="glass-panel" id="factors-chart-panel">
+          <div class="panel-header">
+            <h2><i class="fa-solid fa-gears"></i> What Drives Food Price Changes?</h2>
+            <span style="font-size: 0.8rem; color: var(--text-secondary);">Relative Influence Score</span>
+          </div>
+          <div class="chart-wrapper">
+            <canvas id="factorsChart"></canvas>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- Deep Learning Model Performance and Loss curves (Shown once trained) -->
+      <section class="dashboard-grid-2-equal" id="deep-learning-section" style="display: none; margin-bottom: 2rem;">
+        <!-- Loss Curve Panel -->
+        <div class="glass-panel" id="loss-chart-panel">
+          <div class="panel-header">
+            <h2><i class="fa-solid fa-fire-flame-curved" style="color: #a78bfa;"></i> Model Training Progress (How the AI Learned)</h2>
+            <span style="font-size: 0.75rem; color: var(--text-secondary);" id="epochs-count">Practice Sessions 1-180</span>
+          </div>
+          <div class="chart-wrapper" style="height: 250px;">
+            <canvas id="lossChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Benchmark Metrics Panel -->
+        <div class="glass-panel" id="benchmarks-panel">
+          <div class="panel-header">
+            <h2><i class="fa-solid fa-medal" style="color: var(--accent-amber);"></i> AI Performance Comparison (Predictor Report Card)</h2>
+            <span style="font-size: 0.75rem; color: var(--text-secondary);">Advanced AI vs Standard AI Baseline</span>
+          </div>
+          <table class="performance-table">
+            <thead>
+              <tr>
+                <th>Predictive Target</th>
+                <th>Evaluation Metric</th>
+                <th>Standard AI</th>
+                <th>Advanced AI</th>
+                <th>Accuracy Gain</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="color: var(--accent-cyan); font-weight: 700;">Food Price Forecast</td>
+                <td>Average Price Error<br><span style="font-size: 0.7rem; color: var(--text-muted);">Lower is better</span></td>
+                <td id="metric-rf-price-rmse">0.00</td>
+                <td id="metric-torch-price-rmse" style="color: var(--accent-cyan);">0.00</td>
+                <td><span class="improvement-badge" id="badge-price-improvement">+0.0%</span></td>
+              </tr>
+              <tr>
+                <td style="color: var(--accent-cyan); font-weight: 700;">Food Price Forecast</td>
+                <td>Prediction Score (0-100%)<br><span style="font-size: 0.7rem; color: var(--text-muted);">Higher is better</span></td>
+                <td id="metric-rf-price-r2">0.00</td>
+                <td id="metric-torch-price-r2" style="color: var(--accent-cyan);">0.00</td>
+                <td>-</td>
+              </tr>
+              <tr>
+                <td style="color: var(--accent-rose); font-weight: 700;">Shortage Risk Score</td>
+                <td>Average Risk Error<br><span style="font-size: 0.7rem; color: var(--text-muted);">Lower is better</span></td>
+                <td id="metric-rf-risk-rmse">0.00</td>
+                <td id="metric-torch-risk-rmse" style="color: var(--accent-rose);">0.00</td>
+                <td><span class="improvement-badge" id="badge-risk-improvement">+0.0%</span></td>
+              </tr>
+              <tr>
+                <td style="color: var(--accent-rose); font-weight: 700;">Shortage Risk Score</td>
+                <td>Prediction Score (0-100%)<br><span style="font-size: 0.7rem; color: var(--text-muted);">Higher is better</span></td>
+                <td id="metric-rf-risk-r2">0.00</td>
+                <td id="metric-torch-risk-r2" style="color: var(--accent-rose);">0.00</td>
+                <td>-</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Heatmap & Pipeline Row -->
+      <section class="dashboard-grid-2-equal" aria-label="Global Risk Matrix & Pipeline Ingestion">
+        
+        <!-- Heatmap Panel -->
+        <div class="glass-panel" id="heatmap-panel">
+          <div class="panel-header">
+            <h2><i class="fa-solid fa-border-all"></i> Predicted Regional Shortage Calendar (Risk from 0% to 100%)</h2>
+            <span style="font-size: 0.75rem; color: var(--text-secondary); background: rgba(255,255,255,0.05); padding: 0.25rem 0.5rem; border-radius: 4px;">Click any cell to inspect</span>
+          </div>
+          <div class="heatmap-container">
+            <table class="heatmap-table" id="heatmap-table-el">
+              <thead>
+                <!-- Table header populated dynamically by app.js -->
+                <tr>
+                  <th style="text-align: left; padding-left: 0.75rem;">Region</th>
+                </tr>
+              </thead>
+              <tbody id="heatmap-body">
+                <!-- Rendered via JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Ingestion Pipeline Panel -->
+        <div class="glass-panel" id="pipeline-panel">
+          <div class="panel-header">
+            <h2><i class="fa-solid fa-diagram-project"></i> How Data Flows into the AI</h2>
+            <span style="font-size: 0.75rem; color: var(--text-secondary);">Hover over nodes to inspect details</span>
+          </div>
+          
+          <!-- Animated SVG Ingestion Pipeline -->
+          <div class="svg-container">
+            <svg viewBox="0 0 600 240" class="pipeline-svg">
+              
+              <!-- Connection lines with animated dashes -->
+              <path class="pipe-line animated" d="M 90,60 L 210,120"></path>
+              <path class="pipe-line animated" d="M 90,120 L 210,120"></path>
+              <path class="pipe-line animated" d="M 90,180 L 210,120"></path>
+              
+              <path class="pipe-line animated" d="M 290,120 L 370,120"></path>
+              <path class="pipe-line animated" d="M 450,120 L 510,120"></path>
+              
+              <!-- Node 1: Meteo API -->
+              <g class="pipeline-node" id="node-meteo" transform="translate(40, 30)">
+                <circle cx="25" cy="25" r="22"></circle>
+                <foreignObject x="14" y="14" width="22" height="22">
+                  <i class="fa-solid fa-cloud-sun" style="font-size: 1.1rem; color: #38bdf8; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;"></i>
+                </foreignObject>
+                <text x="25" y="60" class="node-label">Weather Data</text>
+              </g>
+
+              <!-- Node 2: Macro World Bank CPI API -->
+              <g class="pipeline-node" id="node-wb" transform="translate(40, 95)">
+                <circle cx="25" cy="25" r="22"></circle>
+                <foreignObject x="14" y="14" width="22" height="22">
+                  <i class="fa-solid fa-landmark" style="font-size: 1.1rem; color: #fbbf24; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;"></i>
+                </foreignObject>
+                <text x="25" y="60" class="node-label">Inflation Rates</text>
+              </g>
+
+              <!-- Node 3: Local Fallback Ingestion -->
+              <g class="pipeline-node" id="node-fallback" transform="translate(40, 160)">
+                <circle cx="25" cy="25" r="22"></circle>
+                <foreignObject x="14" y="14" width="22" height="22">
+                  <i class="fa-solid fa-server" style="font-size: 1.1rem; color: #a78bfa; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;"></i>
+                </foreignObject>
+                <text x="25" y="60" class="node-label">Shipping & Oil</text>
+              </g>
+
+              <!-- Node 4: Consolidated Aggregation -->
+              <g class="pipeline-node" id="node-aggregator" transform="translate(215, 95)">
+                <circle cx="35" cy="35" r="30"></circle>
+                <foreignObject x="20" y="20" width="30" height="30">
+                  <i class="fa-solid fa-database" style="font-size: 1.4rem; color: #10b981; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;"></i>
+                </foreignObject>
+                <text x="35" y="80" class="node-label" style="font-weight: 700;">Data Aggregator</text>
+              </g>
+
+              <!-- Node 5: Feature Engineering Lags -->
+              <g class="pipeline-node" id="node-lag" transform="translate(370, 95)">
+                <circle cx="35" cy="35" r="30"></circle>
+                <foreignObject x="20" y="20" width="30" height="30">
+                  <i class="fa-solid fa-clock-rotate-left" style="font-size: 1.4rem; color: #00f2fe; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;"></i>
+                </foreignObject>
+                <text x="35" y="80" class="node-label" style="font-weight: 700;">Trend Analysis</text>
+              </g>
+
+              <!-- Node 6: RF Estimator -->
+              <g class="pipeline-node" id="node-rf" transform="translate(510, 95)">
+                <circle cx="35" cy="35" r="32" style="stroke: #f43f5e;"></circle>
+                <foreignObject x="19" y="19" width="32" height="32">
+                  <i class="fa-solid fa-brain" style="font-size: 1.5rem; color: #f43f5e; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;"></i>
+                </foreignObject>
+                <text x="35" y="80" class="node-label" style="font-weight: 800; fill: #f43f5e;">AI Forecasts</text>
+              </g>
+            </svg>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- What-If Policy Simulator & Warning Center Row -->
+      <section class="dashboard-grid-2-split" aria-label="Interactive Simulator & Early Warning Center">
+        
+        <!-- Policy Simulator -->
+        <div class="glass-panel" id="simulator-panel">
+          <div class="panel-header">
+            <h2><i class="fa-solid fa-sliders"></i> Interactive Scenario Simulator (What-If Tester)</h2>
+            <span style="font-size: 0.75rem; color: var(--text-secondary);">Simulation Sandbox</span>
+          </div>
+          
+          <div class="simulator-form" id="sim-form">
+            <!-- Slider 1: Temperature -->
+            <div class="slider-group">
+              <div class="slider-label-row">
+                <span class="slider-name"><i class="fa-solid fa-temperature-high"></i> 🌡️ Temperature Change</span>
+                <span class="slider-val" id="val-sim-temp">+0.0°C</span>
+              </div>
+              <input type="range" class="simulator-range" id="sim-temp" min="-5" max="5" step="0.1" value="0">
+            </div>
+
+            <!-- Slider 2: Precipitation -->
+            <div class="slider-group">
+              <div class="slider-label-row">
+                <span class="slider-name"><i class="fa-solid fa-cloud-showers-water"></i> 🌧️ Rainfall Change</span>
+                <span class="slider-val" id="val-sim-precip">0%</span>
+              </div>
+              <input type="range" class="simulator-range" id="sim-precip" min="-100" max="100" step="5" value="0">
+            </div>
+
+            <!-- Slider 3: Inflation -->
+            <div class="slider-group">
+              <div class="slider-label-row">
+                <span class="slider-name"><i class="fa-solid fa-money-bill-trend-up"></i> 💸 Inflation (Living Costs)</span>
+                <span class="slider-val" id="val-sim-inflation">2.5%</span>
+              </div>
+              <input type="range" class="simulator-range" id="sim-inflation" min="0" max="30" step="0.5" value="2.5">
+            </div>
+
+            <!-- Slider 4: Oil Price -->
+            <div class="slider-group">
+              <div class="slider-label-row">
+                <span class="slider-name"><i class="fa-solid fa-oil-well"></i> ⛽ Fuel / Oil Price</span>
+                <span class="slider-val" id="val-sim-fuel">$65.00/bbl</span>
+              </div>
+              <input type="range" class="simulator-range" id="sim-fuel" min="30" max="150" step="1" value="65">
+            </div>
+
+            <!-- Slider 5: Geopolitical Risk -->
+            <div class="slider-group">
+              <div class="slider-label-row">
+                <span class="slider-name"><i class="fa-solid fa-handshake-simple-slash"></i> 🛡️ Geopolitical Tension</span>
+                <span class="slider-val" id="val-sim-geo">0.05</span>
+              </div>
+              <input type="range" class="simulator-range" id="sim-geo" min="0" max="1" step="0.05" value="0.05">
+            </div>
+
+            <!-- Slider 6: News Sentiment -->
+            <div class="slider-group">
+              <div class="slider-label-row">
+                <span class="slider-name"><i class="fa-solid fa-newspaper"></i> 📰 Public News Tone</span>
+                <span class="slider-val" id="val-sim-sentiment">+0.40</span>
+              </div>
+              <input type="range" class="simulator-range" id="sim-sentiment" min="-1" max="1" step="0.05" value="0.4">
+            </div>
+
+            <!-- Solver Actions -->
+            <div style="grid-column: 1 / -1; display: flex; gap: 0.75rem; margin-top: 0.5rem; flex-wrap: wrap;">
+              <button class="sim-btn sim-btn-primary" id="btn-compute-sim"><i class="fa-solid fa-calculator"></i> Run Simulation</button>
+              <button class="sim-btn sim-btn-secondary" id="btn-reset-sim"><i class="fa-solid fa-rotate-left"></i> Reset Defaults</button>
+              
+              <div class="sim-results">
+                <div class="sim-res-badge">
+                  <span class="sim-res-title">Predicted Price Index</span>
+                  <span class="sim-res-val" id="sim-res-price">112.5</span>
+                </div>
+                <div class="sim-res-badge">
+                  <span class="sim-res-title">Predicted Shortage Risk</span>
+                  <span class="sim-res-val risk" id="sim-res-risk">5.0%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Warning Notifications Center -->
+        <div class="glass-panel" id="ews-panel">
+          <div class="panel-header">
+            <h2><i class="fa-solid fa-triangle-exclamation" style="color: var(--accent-rose);"></i> AI Safety Alerts</h2>
+            <span style="font-size: 0.75rem; color: var(--accent-rose); font-weight: 600;" id="ews-alert-count">0 ACTIVE ALERTS</span>
+          </div>
+          
+          <div class="alert-list" id="ews-alert-list-container">
+            <!-- Alert cards will render here dynamically -->
+          </div>
+        </div>
+
+      </section>
+
+      <!-- Strategic Policy Actions Section -->
+      <section class="policy-block" aria-label="Policy Interventions">
+        <div class="glass-panel" id="policy-panel">
+          <div class="panel-header">
+            <h2><i class="fa-solid fa-building-shield"></i> Recommended Response Actions (When Alerts Trigger)</h2>
+            <span style="font-size: 0.8rem; color: var(--text-secondary);">Safety Protocols</span>
+          </div>
+          
+          <div class="policy-grid">
+            <!-- Policy Card 1 -->
+            <div class="policy-card reserve" id="policy-card-reserve">
+              <div class="policy-icon"><i class="fa-solid fa-warehouse"></i></div>
+              <div class="policy-info">
+                <h4>Mobilize Grain Reserves</h4>
+                <p id="policy-txt-reserve">Release strategic agricultural reserves to local food banks and distribution networks to alleviate supply contractions.</p>
+              </div>
+            </div>
+            
+            <!-- Policy Card 2 -->
+            <div class="policy-card subsidize" id="policy-card-subsidize">
+              <div class="policy-icon"><i class="fa-solid fa-truck-arrow-right"></i></div>
+              <div class="policy-info">
+                <h4>Subsidize Transport & Logistics</h4>
+                <p id="policy-txt-subsidize">Introduce transport fuel rebates and freight subsidies to insulate consumer prices from soaring diesel/crude oil costs.</p>
+              </div>
+            </div>
+            
+            <!-- Policy Card 3 -->
+            <div class="policy-card trade" id="policy-card-trade">
+              <div class="policy-icon"><i class="fa-solid fa-route"></i></div>
+              <div class="policy-info">
+                <h4>Establish Alternate Import Corridors</h4>
+                <p id="policy-txt-trade">Initiate fast-track customs clearances, reduce import tariffs, and secure supply channels with regional trade partners.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      
+      <!-- Interactive Glossary & Explanation Section -->
+      <section class="policy-block" aria-label="Methodology Glossary" style="margin-top: 2rem;">
+        <div class="glass-panel" id="glossary-panel">
+          <div class="panel-header">
+            <h2><i class="fa-solid fa-circle-question" style="color: var(--accent-cyan);"></i> Dashboard Interpretation Guide</h2>
+            <span style="font-size: 0.8rem; color: var(--text-secondary);">How the AI-Engine Works</span>
+          </div>
+          
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-top: 1rem;">
+            
+            <!-- Card 1: Key Terms -->
+            <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); padding: 1.25rem; border-radius: 8px;">
+              <h4 style="font-family: var(--font-display); color: #ffffff; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                <i class="fa-solid fa-book-open" style="color: var(--accent-cyan);"></i> Key Metrics Explained
+              </h4>
+              <ul style="font-size: 0.8rem; color: var(--text-secondary); padding-left: 1.25rem; line-height: 1.55;">
+                <li style="margin-bottom: 0.5rem;"><strong>Shortage Risk (0-100%)</strong>: The mathematical probability of critical food delivery shortfalls occurring within 3 months, calculated using weather metrics, news sentiment, and trade friction.</li>
+                <li><strong>Food Price Index (FPI)</strong>: The projected market value of consumer agricultural goods, where 100 serves as the normalized benchmark baseline.</li>
+              </ul>
+            </div>
+            
+            <!-- Card 2: Neural Net vs Random Forest -->
+            <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); padding: 1.25rem; border-radius: 8px;">
+              <h4 style="font-family: var(--font-display); color: #ffffff; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                <i class="fa-solid fa-brain" style="color: #a78bfa;"></i> The Two Forecasting Backends
+              </h4>
+              <ul style="font-size: 0.8rem; color: var(--text-secondary); padding-left: 1.25rem; line-height: 1.55;">
+                <li style="margin-bottom: 0.5rem;"><strong>RF Baseline (Random Forest)</strong>: An ensemble of Decision Trees trained on-the-fly directly inside your browser runtime. Very fast and lightweight.</li>
+                <li><strong>PyTorch GPU (Neural Network)</strong>: A Multi-Layer Perceptron (MLP) trained locally on your system's RTX GPU using advanced neural layers. Deeply traces complex cross-market dynamics.</li>
+              </ul>
+            </div>
+            
+            <!-- Card 3: Out-of-Sample predictions -->
+            <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); padding: 1.25rem; border-radius: 8px;">
+              <h4 style="font-family: var(--font-display); color: #ffffff; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                <i class="fa-solid fa-clock-rotate-left" style="color: var(--accent-amber);"></i> 3-Month Lead Forecasting
+              </h4>
+              <ul style="font-size: 0.8rem; color: var(--text-secondary); padding-left: 1.25rem; line-height: 1.55;">
+                <li style="margin-bottom: 0.5rem;"><strong>Causal Lags</strong>: The model reads historical indicators at month $t$ (precipitation, oil prices, CPI, etc.) to predict target indexes at month $t+3$.</li>
+                <li><strong>2026 Forecast</strong>: Shows predictions for January, February, and March 2026 computed from actual indicators recorded at the end of 2025.</li>
+              </ul>
+            </div>
+            
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+  </div>
+
+  <!-- Javascript Modules -->
+  <script src="data.js"></script>
+  <script src="model.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
