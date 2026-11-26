@@ -19,7 +19,7 @@ if %errorlevel% neq 0 (
     echo.
     echo [ERROR] Training failed. Retrying with PyTorch CUDA index source...
     echo.
-    python -m pip install --index-url https://download.pytorch.org/whl/cu121 torch==2.12.1
+    python -m pip install --index-url https://download.pytorch.org/whl/cu121 torch==2.13.0
     python train_deep_learning.py
 )
 

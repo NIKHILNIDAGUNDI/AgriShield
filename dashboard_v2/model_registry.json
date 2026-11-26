@@ -1,0 +1,15 @@
+{
+  "schema": "agri-shield-model-registry",
+  "registry_version": 1,
+  "active_model": "1.0.0",
+  "rollback_metadata": {
+    "history": []
+  },
+  "models": {
+    "1.0.0": {
+      "version": "1.0.0",
+      "manifest": "pytorch_food_security_model.manifest.json",
+      "manifest_sha256": "71f3aea56b46d135182d865facf213851bf2cc6a9aa1738a60b1304cbcff7d15"
+    }
+  }
+}

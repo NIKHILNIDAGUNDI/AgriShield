@@ -1,0 +1,54 @@
+name: Tests and static analysis
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Python ${{ matrix.python-version }} and Node tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: dashboard_v2/requirements.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r dashboard_v2/requirements.txt ruff
+
+      - name: Run Python static analysis
+        run: ruff check --ignore I001,RUF046 --per-file-ignores "dashboard_v2/agri_shield_ml/training.py:F401" dashboard_v2/agri_shield_ml dashboard_v2/train_deep_learning.py dashboard_v2/tests
+
+      - name: Run Python unit tests
+        run: python -m unittest discover -s dashboard_v2/tests -p "test_*.py" -v
+
+      - name: Check JavaScript syntax
+        run: |
+          node --check dashboard_v2/app.js
+          node --check dashboard_v2/dashboard_fallback.js
+
+      - name: Run Node.js tests
+        run: |
+          node dashboard_v2/tests/test_app_parsing.js
+          node dashboard_v2/tests/test_dashboard_fallback.js

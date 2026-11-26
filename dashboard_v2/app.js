@@ -11,6 +11,10 @@ let lossChartInstance = null;
 // Deep Learning integration globals
 let dlData = null;
 let activeModelBackend = "RF"; // "RF" or "Torch"
+let apiPredictionActive = false;
+let apiModelVersion = null;
+
+const API_BASE_URL = "";
 
 // CSS Variables for Chart styling
 const chartColors = {
@@ -29,36 +33,165 @@ const regionDefaults = {
 
 // Main Initialization
 document.addEventListener("DOMContentLoaded", () => {
-  // Hide loader with a smooth transition once models train
-  setTimeout(() => {
-    try {
-      // Run ML pipeline in-browser
-      pipelineResults = runModelingPipeline(foodSecurityDataset);
-      
-      // Attempt to load PyTorch Deep Learning training results
-      loadDeepLearningResults();
-      
-      // Render Initial State
-      switchRegion(currentRegion);
-      renderHeatmapTable();
-      initPipelineInteractions();
-      
-      // Populate overview cards on the summary page
-      updateSummaryOverviewCards();
-      
-      // Hide loader
-      const loader = document.getElementById("model-loader");
-      loader.style.opacity = "0";
-      setTimeout(() => loader.style.display = "none", 500);
-    } catch (err) {
-      console.error("Pipeline failure:", err);
-      alert("Error initializing forecasting pipeline in browser. Please check data.js and model.js.");
-    }
-  }, 100);
-
-  // Setup Event Listeners
   initEventListeners();
+  initializeDashboard().catch(err => {
+    console.error("Dashboard initialization failed:", err);
+    alert("Error initializing the forecasting dashboard. Please check the API and data files.");
+  });
 });
+
+async function requestForecastApi(path, body) {
+  const controller = typeof AbortController === "undefined" ? null : new AbortController();
+  const timeout = controller ? setTimeout(() => controller.abort(), 10000) : null;
+  try {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller ? controller.signal : undefined
+    });
+    if (!response.ok) throw new Error(`Forecast API returned HTTP ${response.status}`);
+    return await response.json();
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function setForecastApiStatus(message, available) {
+  const status = document.getElementById("api-connection-status");
+  if (!status) return;
+  status.textContent = message;
+  status.dataset.available = available ? "true" : "false";
+  status.style.color = available ? "#34d399" : "#fbbf24";
+}
+
+function makeApiPipelineResults(dataset, predictions) {
+  const laggedData = prepareForecastingLags(dataset, 3);
+  const byTarget = new Map(predictions.map(item => [
+    `${item.region}\u0000${item.target_month}`, item
+  ]));
+  const targetMonths = new Set();
+  laggedData.forEach(row => {
+    targetMonths.add(`${row.region}\u0000${row.year_month}`);
+    const match = byTarget.get(`${row.region}\u0000${row.year_month}`);
+    row.predicted_price = match ? match.predicted_price : null;
+    row.predicted_shortage_risk = match ? match.predicted_shortage_risk : null;
+    row.is_out_of_sample = false;
+  });
+  predictions.forEach(item => {
+    const key = `${item.region}\u0000${item.target_month}`;
+    if (targetMonths.has(key)) return;
+    const [year, month] = item.target_month.split("-").map(Number);
+    laggedData.push({
+      region: item.region,
+      year_month: item.target_month,
+      year,
+      month,
+      food_price_index: null,
+      shortage_risk_score: null,
+      predicted_price: item.predicted_price,
+      predicted_shortage_risk: item.predicted_shortage_risk,
+      is_out_of_sample: true
+    });
+  });
+
+  const regions = [...new Set(laggedData.map(row => row.region))];
+  regions.forEach(region => {
+    const regionRows = laggedData
+      .filter(row => row.region === region && !row.is_out_of_sample)
+      .sort((a, b) => a.year_month.localeCompare(b.year_month));
+    regionRows.forEach((row, index) => {
+      const window = regionRows.slice(Math.max(0, index - 11), index + 1)
+        .map(item => item.food_price_index);
+      const mean = window.reduce((sum, value) => sum + value, 0) / window.length;
+      const variance = window.reduce((sum, value) => sum + (value - mean) ** 2, 0) / window.length;
+      row.rolling_mean_price = mean;
+      row.rolling_std_price = Math.sqrt(variance);
+      row.abnormal_spike = row.food_price_index > mean + 1.5 * row.rolling_std_price;
+    });
+  });
+
+  const featureCols = lagFeatures.flatMap(source =>
+    [1, 2, 3].map(lag => `${source}_lag_${lag}`)
+  );
+  return { laggedData, featureCols, priceImportances: [], priceForest: null, riskForest: null };
+}
+
+function applyApiPredictions(response, dataset) {
+  const predictions = Array.isArray(response.predictions) ? response.predictions : [];
+  if (!predictions.length) throw new Error("Forecast API returned no prediction rows");
+  apiPredictionActive = true;
+  apiModelVersion = response.model_version;
+  activeModelBackend = "Torch";
+  pipelineResults = makeApiPipelineResults(dataset, predictions);
+  const actualMonths = new Set(dataset.map(row => `${row.region}\u0000${row.year_month}`));
+  const forecastRows = predictions.map(item => ({
+    region: item.region,
+    feature_month: item.feature_month,
+    target_month: item.target_month,
+    torch_predicted_price: item.predicted_price,
+    torch_predicted_risk: item.predicted_shortage_risk,
+    audit: response.audit
+  }));
+  dlData = {
+    predictions: forecastRows.filter(item =>
+      Number(item.target_month.slice(0, 4)) <= 2025 && actualMonths.has(`${item.region}\u0000${item.target_month}`)
+    ),
+    out_of_sample_forecasts: forecastRows.filter(item =>
+      !actualMonths.has(`${item.region}\u0000${item.target_month}`)
+    ),
+    api_version: response.api_version,
+    model_version: response.model_version,
+    audit: response.audit
+  };
+  const selector = document.getElementById("model-backend-selector");
+  if (selector) selector.style.display = "none";
+  const setupCard = document.getElementById("dl-uninitialized-card");
+  if (setupCard) setupCard.style.display = "none";
+  const modelName = document.getElementById("terminal-model-name");
+  if (modelName) modelName.textContent = `Model: AgriShield API v${response.model_version}`;
+  setForecastApiStatus(`Forecast API connected — model v${response.model_version}`, true);
+}
+
+function activateStaticFallback(reason) {
+  apiPredictionActive = false;
+  apiModelVersion = null;
+  activeModelBackend = "RF";
+  dlData = null;
+  pipelineResults = runModelingPipeline(foodSecurityDataset);
+  setForecastApiStatus(
+    `Forecast API unavailable (${reason}); using the existing in-browser static pipeline.`,
+    false
+  );
+  loadDeepLearningResults();
+}
+
+async function initializeDashboard() {
+  try {
+    const health = await requestForecastApi("/v1/health");
+    if (health.status !== "ok") throw new Error("API health check failed");
+    const modelList = await requestForecastApi("/v1/models");
+    const response = await requestForecastApi("/v1/predict", {
+      rows: foodSecurityDataset,
+      forecast_only: false
+    });
+    if (modelList.active_model_version !== response.model_version) {
+      throw new Error("Active model changed while predictions were being loaded");
+    }
+    applyApiPredictions(response, foodSecurityDataset);
+  } catch (error) {
+    console.warn("Forecast API unavailable; using static browser pipeline:", error);
+    activateStaticFallback("server not reachable");
+  }
+
+  switchRegion(currentRegion);
+  renderHeatmapTable();
+  initPipelineInteractions();
+  updateSummaryOverviewCards();
+  const loader = document.getElementById("model-loader");
+  loader.style.opacity = "0";
+  setTimeout(() => loader.style.display = "none", 500);
+}
 
 // Attempts to fetch local PyTorch training logs (if train_deep_learning.py has been run)
 function loadDeepLearningResults() {
@@ -109,12 +242,7 @@ function loadDeepLearningResults() {
     })
     .catch(err => {
       console.log("Deep Learning PyTorch results not found. Local training available via train_model.bat.");
-      document.getElementById("dl-uninitialized-card").style.display = "block";
-      document.getElementById("model-backend-selector").style.display = "none";
-      document.getElementById("gpu-status").style.display = "none";
-      document.getElementById("gpu-status-summary").style.display = "none";
-      document.getElementById("deep-learning-section").style.display = "none";
-      document.getElementById("terminal-model-name").textContent = `Model: RF regressor (in-browser)`;
+      AgriShieldDashboardFallback.applyDeepLearningFallback(document);
     });
 }
 
@@ -1088,7 +1216,8 @@ function resetSimulatorDefaults() {
 }
 
 // Runs real-time machine learning predictions based on simulator slider states
-function computeSimulation() {
+let simulationRequestSequence = 0;
+async function computeSimulation() {
   const temp = parseFloat(document.getElementById("sim-temp").value);
   const precip = parseFloat(document.getElementById("sim-precip").value);
   const inflation = parseFloat(document.getElementById("sim-inflation").value);
@@ -1149,23 +1278,47 @@ function computeSimulation() {
     }
   });
 
-  const predictedPrice = pipelineResults.priceForest.predictRow(featureVector);
-  const predictedRisk = pipelineResults.riskForest.predictRow(featureVector);
-
   const priceVal = document.getElementById("sim-res-price");
   const riskVal = document.getElementById("sim-res-risk");
-  
-  priceVal.textContent = predictedPrice.toFixed(1);
-  riskVal.textContent = `${predictedRisk.toFixed(1)}%`;
-  
-  riskVal.className = "sim-res-val risk";
-  if (predictedRisk > 65) {
-    riskVal.classList.add("critical");
-  } else if (predictedRisk > 30) {
-    riskVal.classList.add("warning");
+
+  if (apiPredictionActive) {
+    const requestSequence = ++simulationRequestSequence;
+    const features = Object.fromEntries(
+      pipelineResults.featureCols.map((name, index) => [name, featureVector[index]])
+    );
+    try {
+      const response = await requestForecastApi("/v1/predict", {
+        region: currentRegion,
+        features
+      });
+      if (requestSequence !== simulationRequestSequence) return;
+      const prediction = response.predictions[0];
+      updateSimulationResult(prediction.predicted_price, prediction.predicted_shortage_risk);
+    } catch (error) {
+      console.warn("Forecast API became unavailable; switching to static fallback:", error);
+      activateStaticFallback("server not reachable");
+      computeSimulation();
+    }
+    return;
   }
 
-  highlightPolicyInterventions(geo, fuel, cropYield);
+  const predictedPrice = pipelineResults.priceForest.predictRow(featureVector);
+  const predictedRisk = pipelineResults.riskForest.predictRow(featureVector);
+  updateSimulationResult(predictedPrice, predictedRisk);
+
+  function updateSimulationResult(predictedPrice, predictedRisk) {
+    priceVal.textContent = predictedPrice.toFixed(1);
+    riskVal.textContent = `${predictedRisk.toFixed(1)}%`;
+
+    riskVal.className = "sim-res-val risk";
+    if (predictedRisk > 65) {
+      riskVal.classList.add("critical");
+    } else if (predictedRisk > 30) {
+      riskVal.classList.add("warning");
+    }
+
+    highlightPolicyInterventions(geo, fuel, cropYield);
+  }
 }
 
 // Highlights specific policy recommendations dynamically
@@ -1248,16 +1401,10 @@ async function fetchAndCalibrateCustomRegion(regionName) {
   regionName = normalizedRegionName;
   
   // Prevent duplicate additions
-  const lowerName = regionName.toLowerCase().trim();
   const existingRegions = [...new Set(foodSecurityDataset.map(row => row.region))];
-  const matched = existingRegions.find(r => r.toLowerCase() === lowerName);
+  const matched = findExistingRegion(regionName, existingRegions);
   if (matched) {
-    alert(`Region '${matched}' is already loaded. Switching view to it.`);
-    const card = document.getElementById(`overview-card-${matched.toLowerCase()}`);
-    if (card) {
-      card.click();
-      card.scrollIntoView({ behavior: "smooth" });
-    }
+    activateExistingRegion(matched);
     return;
   }
   
@@ -1269,35 +1416,12 @@ async function fetchAndCalibrateCustomRegion(regionName) {
   
   try {
     // 1. Geocode the region
-    const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(regionName)}&count=1&language=en&format=json`;
-    const geoResponse = await fetch(geoUrl);
-    if (!geoResponse.ok) throw new Error(`Geocoding API returned HTTP ${geoResponse.status}.`);
-    const geoRes = await geoResponse.json();
-    if (!geoRes.results || geoRes.results.length === 0) {
-      throw new Error(`Could not resolve location '${regionName}'.`);
-    }
-    
-    const geo = geoRes.results[0];
-    const resolvedName = typeof geo.name === "string" ? geo.name.trim() : "";
-    const lat = Number(geo.latitude);
-    const lon = Number(geo.longitude);
-    const countryCode = typeof geo.country_code === "string" ? geo.country_code.toUpperCase() : "";
-    if (resolvedName.length < 2 || resolvedName.length > 100 ||
-        !Number.isFinite(lat) || lat < -90 || lat > 90 ||
-        !Number.isFinite(lon) || lon < -180 || lon > 180 ||
-        !/^[A-Z]{2,3}$/.test(countryCode)) {
-      throw new Error("Geocoding API returned malformed location data.");
-    }
+    const { resolvedName, lat, lon, countryCode } = await geocodeCustomRegion(regionName);
     
     // Prevent duplicate based on resolved name
-    const matchedResolved = existingRegions.find(r => r.toLowerCase() === resolvedName.toLowerCase());
+    const matchedResolved = findExistingRegion(resolvedName, existingRegions);
     if (matchedResolved) {
-      alert(`Region '${matchedResolved}' is already loaded. Switching view to it.`);
-      const card = document.getElementById(`overview-card-${matchedResolved.toLowerCase()}`);
-      if (card) {
-        card.click();
-        card.scrollIntoView({ behavior: "smooth" });
-      }
+      activateExistingRegion(matchedResolved);
       statusDiv.style.display = "none";
       fetchBtn.disabled = false;
       inputEl.disabled = false;
@@ -1306,32 +1430,11 @@ async function fetchAndCalibrateCustomRegion(regionName) {
     
     // 2. Fetch historical weather
     statusText.textContent = `Fetching climatology for lat: ${lat.toFixed(2)}, lon: ${lon.toFixed(2)}...`;
-    const weatherUrl = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=2021-01-01&end_date=2025-12-31&daily=temperature_2m_mean,precipitation_sum&timezone=auto`;
-    const weatherResponse = await fetch(weatherUrl);
-    if (!weatherResponse.ok) throw new Error(`Weather API returned HTTP ${weatherResponse.status}.`);
-    const weatherRes = await weatherResponse.json();
-    if (!weatherRes.daily ||
-        !Array.isArray(weatherRes.daily.time) ||
-        !Array.isArray(weatherRes.daily.temperature_2m_mean) ||
-        !Array.isArray(weatherRes.daily.precipitation_sum) ||
-        weatherRes.daily.time.length !== weatherRes.daily.temperature_2m_mean.length ||
-        weatherRes.daily.time.length !== weatherRes.daily.precipitation_sum.length) {
-      throw new Error("Weather API returned malformed daily observations.");
-    }
-    const dailyWeather = weatherRes.daily;
+    const dailyWeather = await fetchCustomRegionWeather(lat, lon);
     
     // 3. Fetch macroeconomic inflation rate from World Bank
     statusText.textContent = `Fetching inflation data for country code: ${countryCode}...`;
-    let inflationMap = {};
-    try {
-      const wbUrl = `https://api.worldbank.org/v2/country/${countryCode}/indicator/FP.CPI.TOTL.ZG?date=2021:2025&format=json`;
-      const wbResponse = await fetch(wbUrl);
-      if (!wbResponse.ok) throw new Error(`World Bank API returned HTTP ${wbResponse.status}.`);
-      const wbRes = await wbResponse.json();
-      inflationMap = parseWorldBankInflation(wbRes);
-    } catch (e) {
-      console.warn("World Bank inflation fetch failed, using fallback constants.", e);
-    }
+    const inflationMap = await fetchCustomRegionInflation(countryCode, statusText);
     
     // Show model calibrating overlay
     statusText.textContent = `Calibrating forecasting models...`;
@@ -1343,107 +1446,186 @@ async function fetchAndCalibrateCustomRegion(regionName) {
     const monthlyWeather = aggregateWeatherToMonthly(dailyWeather);
     
     // 4. Generate records for 2021-01 to 2025-12 (60 months)
-    const months = [];
-    const dateStart = new Date("2021-01-01");
-    for (let m = 0; m < 60; m++) {
-      const d = new Date(dateStart);
-      d.setMonth(dateStart.getMonth() + m);
-      const year = d.getFullYear();
-      const month = d.getMonth() + 1;
-      const yearMonth = `${year}-${month.toString().padStart(2, '0')}`;
-      months.push({ year, month, yearMonth });
+    const regionRecords = createCustomRegionRecords(
+      resolvedName, lat, monthlyWeather, inflationMap
+    );
+
+    // Prefer the verified server model for new and existing regions.
+    const updatedDataset = [...foodSecurityDataset, ...regionRecords];
+    if (apiPredictionActive) {
+      try {
+        statusText.textContent = "Requesting verified API forecasts...";
+        const apiResponse = await requestForecastApi("/v1/predict", {
+          rows: updatedDataset,
+          forecast_only: false
+        });
+        foodSecurityDataset.push(...regionRecords);
+        applyApiPredictions(apiResponse, foodSecurityDataset);
+      } catch (apiError) {
+        console.warn("Forecast API became unavailable; switching to static fallback:", apiError);
+        foodSecurityDataset.push(...regionRecords);
+        activateStaticFallback("server not reachable");
+      }
+    } else {
+      foodSecurityDataset.push(...regionRecords);
+      pipelineResults = runModelingPipeline(foodSecurityDataset);
     }
     
-    const regionRecords = [];
-    months.forEach(m => {
-      const ym = m.yearMonth;
-      const wData = monthlyWeather[ym] || {};
-      
-      // Determine base weather if API failed
-      let temp = wData.temperature;
-      let precip = wData.precipitation;
-      let temperatureProvenance = "observed";
-      let precipitationProvenance = "observed";
-      
-      const month_offset = lat < 0 ? 10 : 4;
-      if (temp === null || temp === undefined) {
-        temp = 20 - 12 * Math.abs(lat) / 45 + 12 * Math.sin(2 * Math.PI * (m.month - month_offset) / 12);
-        temperatureProvenance = "estimated fallback";
+    function findExistingRegion(regionName, regions) {
+      const normalizedName = regionName.toLowerCase().trim();
+      return regions.find(region => region.toLowerCase() === normalizedName);
+    }
+
+    function activateExistingRegion(region) {
+      alert(`Region '${region}' is already loaded. Switching view to it.`);
+      const card = document.getElementById(`overview-card-${region.toLowerCase()}`);
+      if (card) {
+        card.click();
+        card.scrollIntoView({ behavior: "smooth" });
       }
-      if (precip === null || precip === undefined) {
-        precip = 55 + 25 * Math.sin(2 * Math.PI * (m.month - 3) / 12) + (Math.random() * 20 - 10);
-        precipitationProvenance = "synthetic fallback";
+    }
+
+    async function geocodeCustomRegion(regionName) {
+      const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(regionName)}&count=1&language=en&format=json`;
+      const geoResponse = await fetch(geoUrl);
+      if (!geoResponse.ok) throw new Error(`Geocoding API returned HTTP ${geoResponse.status}.`);
+      const geoRes = await geoResponse.json();
+      if (!geoRes.results || geoRes.results.length === 0) {
+        throw new Error(`Could not resolve location '${regionName}'.`);
       }
-      
-      // World Bank inflation or fallback
-      let inflation = inflationMap[m.year];
-      let inflationProvenance = "observed";
-      if (inflation === undefined || inflation === null) {
-        inflation = 3.0; // standard fallback
-        inflationProvenance = "estimated fallback";
+
+      const geo = geoRes.results[0];
+      const resolvedName = typeof geo.name === "string" ? geo.name.trim() : "";
+      const lat = Number(geo.latitude);
+      const lon = Number(geo.longitude);
+      const countryCode = typeof geo.country_code === "string" ? geo.country_code.toUpperCase() : "";
+      if (resolvedName.length < 2 || resolvedName.length > 100 ||
+          !Number.isFinite(lat) || lat < -90 || lat > 90 ||
+          !Number.isFinite(lon) || lon < -180 || lon > 180 ||
+          !/^[A-Z]{2,3}$/.test(countryCode)) {
+        throw new Error("Geocoding API returned malformed location data.");
       }
-      
-      // Simulate crop yield, fuel cost, price index, shortage risk
-      const yieldFactor = 0.9;
-      const geoRisk = 0.15;
-      const newsSent = 0.2;
-      
-      // Simulated oil/fuel price
-      const baseOil = 65 + 40 * Math.exp(-Math.pow((m.year + m.month/12.0 - 2022.4)/0.7, 2)) + (Math.random() * 6 - 3);
-      const transportCost = 1.0 + 0.8 * (baseOil - 50)/50 + 0.5 * geoRisk + (Math.random() * 0.1 - 0.05);
-      
-      let cropYield = 100 * yieldFactor;
-      if (temp > 28 && precip < 25) {
-        cropYield *= 0.65; // heatwave/drought shock
+      return { resolvedName, lat, lon, countryCode };
+    }
+
+    async function fetchCustomRegionWeather(lat, lon) {
+      const weatherUrl = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=2021-01-01&end_date=2025-12-31&daily=temperature_2m_mean,precipitation_sum&timezone=auto`;
+      const weatherResponse = await fetch(weatherUrl);
+      if (!weatherResponse.ok) throw new Error(`Weather API returned HTTP ${weatherResponse.status}.`);
+      return parseOpenMeteoDaily(await weatherResponse.json());
+    }
+
+    async function fetchCustomRegionInflation(countryCode, statusText) {
+      statusText.textContent = `Fetching inflation data for country code: ${countryCode}...`;
+      try {
+        const wbUrl = `https://api.worldbank.org/v2/country/${countryCode}/indicator/FP.CPI.TOTL.ZG?date=2021:2025&format=json`;
+        const wbResponse = await fetch(wbUrl);
+        if (!wbResponse.ok) throw new Error(`World Bank API returned HTTP ${wbResponse.status}.`);
+        return parseWorldBankInflation(await wbResponse.json());
+      } catch (error) {
+        console.warn("World Bank inflation fetch failed, using fallback constants.", error);
+        return {};
       }
-      cropYield += (Math.random() * 4 - 2);
-      
-      let priceIdx = 100.0;
-      priceIdx += (100.0 - cropYield) * 1.2;
-      priceIdx += (transportCost - 1.0) * 45.0;
-      priceIdx += inflation * 1.5;
-      priceIdx += geoRisk * 30.0;
-      priceIdx -= newsSent * 15.0;
-      priceIdx += (Math.random() * 8 - 4);
-      
-      const droughtIndex = Math.max(0, Math.min(10, (temp - 15) / 5 + (100 - precip) / 20));
-      let shortageRisk = (100 - cropYield) * 0.4 + (transportCost - 1.0) * 20 + geoRisk * 25 + (10 - droughtIndex) * -2;
-      shortageRisk = Math.max(5.0, Math.min(95.0, shortageRisk + (Math.random() * 4 - 2)));
-      
-      regionRecords.push({
-        year_month: ym,
-        year: m.year,
-        month: m.month,
-        crop_yield: cropYield,
-        fuel_price: baseOil,
-        transport_cost: transportCost,
-        inflation_rate: inflation,
-        geopolitical_risk: geoRisk,
-        news_sentiment: newsSent,
-        food_price_index: priceIdx,
-        shortage_risk_score: shortageRisk,
-        temperature: temp,
-        precipitation: precip,
-        region: resolvedName,
-        data_provenance: {
-          temperature: temperatureProvenance,
-          precipitation: precipitationProvenance,
-          inflation_rate: inflationProvenance,
-          crop_yield: "synthetic",
-          fuel_price: "synthetic",
-          transport_cost: "estimated",
-          food_price_index: "synthetic",
-          shortage_risk_score: "synthetic"
+    }
+
+    function createCustomRegionRecords(region, lat, monthlyWeather, inflationMap) {
+      const months = [];
+      const dateStart = new Date("2021-01-01");
+      for (let monthOffset = 0; monthOffset < 60; monthOffset++) {
+        const date = new Date(dateStart);
+        date.setMonth(dateStart.getMonth() + monthOffset);
+        const year = date.getFullYear();
+        const month = date.getMonth() + 1;
+        months.push({
+          year,
+          month,
+          yearMonth: `${year}-${month.toString().padStart(2, "0")}`
+        });
+      }
+
+      return months.map(monthData => {
+        const { year, month, yearMonth } = monthData;
+        const weather = monthlyWeather[yearMonth] || {};
+        let temperature = weather.temperature;
+        let precipitation = weather.precipitation;
+        let temperatureProvenance = "observed";
+        let precipitationProvenance = "observed";
+
+        const monthOffset = lat < 0 ? 10 : 4;
+        if (temperature === null || temperature === undefined) {
+          temperature = 20 - 12 * Math.abs(lat) / 45 +
+            12 * Math.sin(2 * Math.PI * (month - monthOffset) / 12);
+          temperatureProvenance = "estimated fallback";
         }
+        if (precipitation === null || precipitation === undefined) {
+          precipitation = 55 + 25 * Math.sin(2 * Math.PI * (month - 3) / 12) +
+            (Math.random() * 20 - 10);
+          precipitationProvenance = "synthetic fallback";
+        }
+
+        let inflation = inflationMap[year];
+        let inflationProvenance = "observed";
+        if (inflation === undefined || inflation === null) {
+          inflation = 3.0;
+          inflationProvenance = "estimated fallback";
+        }
+
+        const yieldFactor = 0.9;
+        const geoRisk = 0.15;
+        const newsSent = 0.2;
+        const baseOil = 65 + 40 * Math.exp(-Math.pow((year + month / 12.0 - 2022.4) / 0.7, 2)) +
+          (Math.random() * 6 - 3);
+        const transportCost = 1.0 + 0.8 * (baseOil - 50) / 50 +
+          0.5 * geoRisk + (Math.random() * 0.1 - 0.05);
+
+        let cropYield = 100 * yieldFactor;
+        if (temperature > 28 && precipitation < 25) cropYield *= 0.65;
+        cropYield += Math.random() * 4 - 2;
+
+        let priceIdx = 100.0;
+        priceIdx += (100.0 - cropYield) * 1.2;
+        priceIdx += (transportCost - 1.0) * 45.0;
+        priceIdx += inflation * 1.5;
+        priceIdx += geoRisk * 30.0;
+        priceIdx -= newsSent * 15.0;
+        priceIdx += Math.random() * 8 - 4;
+
+        const droughtIndex = Math.max(
+          0, Math.min(10, (temperature - 15) / 5 + (100 - precipitation) / 20)
+        );
+        let shortageRisk = (100 - cropYield) * 0.4 + (transportCost - 1.0) * 20 +
+          geoRisk * 25 + (10 - droughtIndex) * -2;
+        shortageRisk = Math.max(5.0, Math.min(95.0, shortageRisk + (Math.random() * 4 - 2)));
+
+        return {
+          year_month: yearMonth,
+          year,
+          month,
+          crop_yield: cropYield,
+          fuel_price: baseOil,
+          transport_cost: transportCost,
+          inflation_rate: inflation,
+          geopolitical_risk: geoRisk,
+          news_sentiment: newsSent,
+          food_price_index: priceIdx,
+          shortage_risk_score: shortageRisk,
+          temperature,
+          precipitation,
+          region,
+          data_provenance: {
+            temperature: temperatureProvenance,
+            precipitation: precipitationProvenance,
+            inflation_rate: inflationProvenance,
+            crop_yield: "synthetic",
+            fuel_price: "synthetic",
+            transport_cost: "estimated",
+            food_price_index: "synthetic",
+            shortage_risk_score: "synthetic"
+          }
+        };
       });
-    });
-    
-    // Add to global dataset
-    foodSecurityDataset.push(...regionRecords);
-    
-    // Recalibrate Random Forest pipeline in JavaScript
-    pipelineResults = runModelingPipeline(foodSecurityDataset);
-    
+    }
+
     // Dynamically register defaults and chart colors
     regionDefaults[resolvedName] = {
       temp: 0.0,
@@ -1473,7 +1655,9 @@ async function fetchAndCalibrateCustomRegion(regionName) {
     }
     
     // Hide status and loading overlay
-    statusText.textContent = "Calibrated with observed weather/CPI, estimated fallback values, and synthetic agro-economic fields.";
+    statusText.textContent = apiPredictionActive
+      ? `Predicted by API model v${apiModelVersion}; source data includes observed weather/CPI and estimated or synthetic indicators.`
+      : "Calibrated with observed weather/CPI, estimated fallback values, and synthetic agro-economic fields.";
     statusDiv.style.display = "none";
     inputEl.value = "";
     
@@ -1497,6 +1681,7 @@ function parseWorldBankInflation(res) {
   const inflationMap = {};
   if (res && res.length > 1 && Array.isArray(res[1])) {
     res[1].forEach(item => {
+      if (!item || typeof item !== "object") return;
       const year = Number(item.date);
       const val = item.value;
       if (Number.isInteger(year) && year >= 2021 && year <= 2025 &&
@@ -1506,6 +1691,19 @@ function parseWorldBankInflation(res) {
     });
   }
   return inflationMap;
+}
+
+function parseOpenMeteoDaily(response) {
+  const daily = response && response.daily;
+  if (!daily ||
+      !Array.isArray(daily.time) ||
+      !Array.isArray(daily.temperature_2m_mean) ||
+      !Array.isArray(daily.precipitation_sum) ||
+      daily.time.length !== daily.temperature_2m_mean.length ||
+      daily.time.length !== daily.precipitation_sum.length) {
+    throw new Error("Weather API returned malformed daily observations.");
+  }
+  return daily;
 }
 
 // Helper to aggregate daily Open-Meteo weather response to monthly average temperature and total precipitation
@@ -1543,15 +1741,23 @@ function aggregateWeatherToMonthly(dailyData) {
 // Helper to create and insert overview card and tab button for a custom region
 function createCustomUIElements(region) {
   const lower = region.toLowerCase();
-  
-  // 1. Landing Page Card
-  const grid = document.querySelector(".overview-grid");
+
   if (!document.getElementById(`overview-card-${lower}`)) {
-    const card = document.createElement("div");
-    card.className = "overview-card";
-    card.id = `overview-card-${lower}`;
-    card.dataset.region = region;
-    card.innerHTML = `
+    createCustomOverviewCard(region, lower);
+  }
+
+  if (!document.getElementById(`tab-${lower}`)) {
+    createCustomRegionTab(region, lower);
+  }
+}
+
+function createCustomOverviewCard(region, lower) {
+  const grid = document.querySelector(".overview-grid");
+  const card = document.createElement("div");
+  card.className = "overview-card";
+  card.id = `overview-card-${lower}`;
+  card.dataset.region = region;
+  card.innerHTML = `
       <div class="card-border-glow"></div>
       <div class="card-main">
         <div class="card-head">
@@ -1574,42 +1780,38 @@ function createCustomUIElements(region) {
         </div>
       </div>
     `;
-    grid.appendChild(card);
-    
-    // Overview card click listener
-    card.addEventListener("click", () => {
-      document.querySelectorAll(".overview-card").forEach(c => c.classList.remove("active"));
-      card.classList.add("active");
-      
-      currentRegion = region;
-      
-      // Sync tabs
-      document.querySelectorAll(".tab-btn").forEach(btn => {
-        btn.classList.remove("active");
-        btn.setAttribute("aria-selected", "false");
-        if (btn.dataset.region === currentRegion) {
-          btn.classList.add("active");
-          btn.setAttribute("aria-selected", "true");
-        }
-      });
-      
-      switchRegion(currentRegion);
-      document.getElementById("briefing-text-container").innerHTML = `
-        <span class="terminal-prompt">> Region selected: <strong>${currentRegion}</strong>.<br>> Ready to generate briefing. Click 'Generate Predictive Summary' below to compile intelligence.</span>
-      `;
-    });
-  }
-  
-  // 2. Tabs Selector button
+  grid.appendChild(card);
+  card.addEventListener("click", () => selectCustomRegionCard(card, region));
+}
+
+function selectCustomRegionCard(card, region) {
+  document.querySelectorAll(".overview-card").forEach(item => item.classList.remove("active"));
+  card.classList.add("active");
+  currentRegion = region;
+
+  document.querySelectorAll(".tab-btn").forEach(button => {
+    button.classList.remove("active");
+    button.setAttribute("aria-selected", "false");
+    if (button.dataset.region === currentRegion) {
+      button.classList.add("active");
+      button.setAttribute("aria-selected", "true");
+    }
+  });
+
+  switchRegion(currentRegion);
+  document.getElementById("briefing-text-container").innerHTML = `
+    <span class="terminal-prompt">> Region selected: <strong>${currentRegion}</strong>.<br>> Ready to generate briefing. Click 'Generate Predictive Summary' below to compile intelligence.</span>
+  `;
+}
+
+function createCustomRegionTab(region, lower) {
   const tabsContainer = document.getElementById("region-selector");
-  if (!document.getElementById(`tab-${lower}`)) {
-    const tabBtn = document.createElement("button");
-    tabBtn.className = "tab-btn";
-    tabBtn.id = `tab-${lower}`;
-    tabBtn.dataset.region = region;
-    tabBtn.setAttribute("role", "tab");
-    tabBtn.setAttribute("aria-selected", "false");
-    tabBtn.innerHTML = `<i class="fa-solid fa-globe"></i> ${region}`;
-    tabsContainer.appendChild(tabBtn);
-  }
+  const tabBtn = document.createElement("button");
+  tabBtn.className = "tab-btn";
+  tabBtn.id = `tab-${lower}`;
+  tabBtn.dataset.region = region;
+  tabBtn.setAttribute("role", "tab");
+  tabBtn.setAttribute("aria-selected", "false");
+  tabBtn.innerHTML = `<i class="fa-solid fa-globe"></i> ${region}`;
+  tabsContainer.appendChild(tabBtn);
 }

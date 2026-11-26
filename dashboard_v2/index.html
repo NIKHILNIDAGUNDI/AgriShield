@@ -84,6 +84,9 @@
             <div class="small-spinner"></div>
             <span id="custom-region-status-text">Geocoding region...</span>
           </div>
+          <div id="api-connection-status" role="status" aria-live="polite" style="font-size: 0.78rem; color: #cbd5e1;">
+            Checking forecast API; the static browser pipeline is used only if the service is unavailable.
+          </div>
         </div>
       </section>
 
@@ -715,6 +718,7 @@
   <!-- Javascript Modules -->
   <script src="data.js"></script>
   <script src="model.js"></script>
+  <script src="dashboard_fallback.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

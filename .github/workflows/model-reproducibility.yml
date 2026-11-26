@@ -1,0 +1,92 @@
+name: Model reproducibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CUDA_VISIBLE_DEVICES: ""
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: dashboard_v2/requirements.txt
+
+      - name: Install model dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r dashboard_v2/requirements.txt
+
+      - name: Train twice with bounded epochs
+        working-directory: dashboard_v2
+        run: |
+          python train_deep_learning.py --csv ../food_security_data.csv --output-dir .ci-model-repro/run-1 --epochs 2
+          python train_deep_learning.py --csv ../food_security_data.csv --output-dir .ci-model-repro/run-2 --epochs 2
+
+      - name: Verify results, artifact contract, and reproducibility
+        working-directory: dashboard_v2
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          base = Path(".ci-model-repro")
+          runs = []
+          for run_name in ("run-1", "run-2"):
+              output = base / run_name
+              results = json.loads((output / "train_results.json").read_text(encoding="utf-8"))
+              manifest_path = output / "pytorch_food_security_model.manifest.json"
+              manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+              required_results = {
+                  "device", "gpu_model", "epoch_logs", "metrics", "validation",
+                  "predictions", "out_of_sample_forecasts",
+              }
+              assert required_results <= results.keys(), "train_results.json is missing required fields"
+              assert results["device"] == "cpu", "reproducibility job must use CPU"
+              assert len(results["epoch_logs"]) == 2, "expected the requested two training epochs"
+              assert len(results["validation"]["folds"]) == 4, "expected four walk-forward folds"
+              assert results["predictions"], "validation predictions must be present"
+              assert results["out_of_sample_forecasts"], "production forecasts must be present"
+
+              assert manifest["schema"] == "agri-shield-ml-model"
+              assert manifest["artifact_version"] == 1
+              assert manifest["model"]["architecture"] == "FoodSecurityNet"
+              assert manifest["model"]["input_dim"] == len(manifest["feature_names"])
+              assert len(manifest["feature_names"]) == len(set(manifest["feature_names"]))
+              assert {"features", "price_target", "risk_target"} <= manifest["scalers"].keys()
+              assert manifest["metrics"] == results["metrics"]
+              weights_name = manifest["weights"]["file"]
+              assert Path(weights_name).name == weights_name, "weights must be relative to the manifest"
+              weights_hash = hashlib.sha256((output / weights_name).read_bytes()).hexdigest()
+              assert weights_hash == manifest["weights"]["sha256"], "weights hash does not match manifest"
+              runs.append((results, manifest))
+
+          assert runs[0][0] == runs[1][0], "training results differ between identical seeded runs"
+          assert runs[0][1] == runs[1][1], "model manifests differ between identical seeded runs"
+          print("Both seeded two-epoch runs produced matching results and valid model artifacts.")
+          PY
+
+      - name: Upload reproducibility artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-reproducibility-results
+          path: dashboard_v2/.ci-model-repro/
+          if-no-files-found: error
+          retention-days: 7
