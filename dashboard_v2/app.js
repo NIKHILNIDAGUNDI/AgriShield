@@ -1239,10 +1239,13 @@ async function fetchAndCalibrateCustomRegion(regionName) {
   const fetchBtn = document.getElementById("btn-fetch-custom-region");
   const inputEl = document.getElementById("input-custom-region");
   
-  if (!regionName || !regionName.trim()) {
-    alert("Please enter a valid region name.");
+  const normalizedRegionName = typeof regionName === "string" ? regionName.trim() : "";
+  if (normalizedRegionName.length < 2 || normalizedRegionName.length > 100 ||
+      !/^[\p{L}\p{M} .'-]+$/u.test(normalizedRegionName)) {
+    alert("Please enter a valid region name (2-100 letters, spaces, or common name punctuation).");
     return;
   }
+  regionName = normalizedRegionName;
   
   // Prevent duplicate additions
   const lowerName = regionName.toLowerCase().trim();
@@ -1267,16 +1270,24 @@ async function fetchAndCalibrateCustomRegion(regionName) {
   try {
     // 1. Geocode the region
     const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(regionName)}&count=1&language=en&format=json`;
-    const geoRes = await fetch(geoUrl).then(r => r.json());
+    const geoResponse = await fetch(geoUrl);
+    if (!geoResponse.ok) throw new Error(`Geocoding API returned HTTP ${geoResponse.status}.`);
+    const geoRes = await geoResponse.json();
     if (!geoRes.results || geoRes.results.length === 0) {
       throw new Error(`Could not resolve location '${regionName}'.`);
     }
     
     const geo = geoRes.results[0];
-    const resolvedName = geo.name;
-    const lat = geo.latitude;
-    const lon = geo.longitude;
-    const countryCode = geo.country_code || "USA";
+    const resolvedName = typeof geo.name === "string" ? geo.name.trim() : "";
+    const lat = Number(geo.latitude);
+    const lon = Number(geo.longitude);
+    const countryCode = typeof geo.country_code === "string" ? geo.country_code.toUpperCase() : "";
+    if (resolvedName.length < 2 || resolvedName.length > 100 ||
+        !Number.isFinite(lat) || lat < -90 || lat > 90 ||
+        !Number.isFinite(lon) || lon < -180 || lon > 180 ||
+        !/^[A-Z]{2,3}$/.test(countryCode)) {
+      throw new Error("Geocoding API returned malformed location data.");
+    }
     
     // Prevent duplicate based on resolved name
     const matchedResolved = existingRegions.find(r => r.toLowerCase() === resolvedName.toLowerCase());
@@ -1296,15 +1307,27 @@ async function fetchAndCalibrateCustomRegion(regionName) {
     // 2. Fetch historical weather
     statusText.textContent = `Fetching climatology for lat: ${lat.toFixed(2)}, lon: ${lon.toFixed(2)}...`;
     const weatherUrl = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=2021-01-01&end_date=2025-12-31&daily=temperature_2m_mean,precipitation_sum&timezone=auto`;
-    const weatherRes = await fetch(weatherUrl).then(r => r.json());
-    const dailyWeather = weatherRes.daily || {};
+    const weatherResponse = await fetch(weatherUrl);
+    if (!weatherResponse.ok) throw new Error(`Weather API returned HTTP ${weatherResponse.status}.`);
+    const weatherRes = await weatherResponse.json();
+    if (!weatherRes.daily ||
+        !Array.isArray(weatherRes.daily.time) ||
+        !Array.isArray(weatherRes.daily.temperature_2m_mean) ||
+        !Array.isArray(weatherRes.daily.precipitation_sum) ||
+        weatherRes.daily.time.length !== weatherRes.daily.temperature_2m_mean.length ||
+        weatherRes.daily.time.length !== weatherRes.daily.precipitation_sum.length) {
+      throw new Error("Weather API returned malformed daily observations.");
+    }
+    const dailyWeather = weatherRes.daily;
     
     // 3. Fetch macroeconomic inflation rate from World Bank
     statusText.textContent = `Fetching inflation data for country code: ${countryCode}...`;
     let inflationMap = {};
     try {
       const wbUrl = `https://api.worldbank.org/v2/country/${countryCode}/indicator/FP.CPI.TOTL.ZG?date=2021:2025&format=json`;
-      const wbRes = await fetch(wbUrl).then(r => r.json());
+      const wbResponse = await fetch(wbUrl);
+      if (!wbResponse.ok) throw new Error(`World Bank API returned HTTP ${wbResponse.status}.`);
+      const wbRes = await wbResponse.json();
       inflationMap = parseWorldBankInflation(wbRes);
     } catch (e) {
       console.warn("World Bank inflation fetch failed, using fallback constants.", e);
@@ -1339,19 +1362,25 @@ async function fetchAndCalibrateCustomRegion(regionName) {
       // Determine base weather if API failed
       let temp = wData.temperature;
       let precip = wData.precipitation;
+      let temperatureProvenance = "observed";
+      let precipitationProvenance = "observed";
       
       const month_offset = lat < 0 ? 10 : 4;
       if (temp === null || temp === undefined) {
         temp = 20 - 12 * Math.abs(lat) / 45 + 12 * Math.sin(2 * Math.PI * (m.month - month_offset) / 12);
+        temperatureProvenance = "estimated fallback";
       }
       if (precip === null || precip === undefined) {
         precip = 55 + 25 * Math.sin(2 * Math.PI * (m.month - 3) / 12) + (Math.random() * 20 - 10);
+        precipitationProvenance = "synthetic fallback";
       }
       
       // World Bank inflation or fallback
       let inflation = inflationMap[m.year];
+      let inflationProvenance = "observed";
       if (inflation === undefined || inflation === null) {
         inflation = 3.0; // standard fallback
+        inflationProvenance = "estimated fallback";
       }
       
       // Simulate crop yield, fuel cost, price index, shortage risk
@@ -1395,7 +1424,17 @@ async function fetchAndCalibrateCustomRegion(regionName) {
         shortage_risk_score: shortageRisk,
         temperature: temp,
         precipitation: precip,
-        region: resolvedName
+        region: resolvedName,
+        data_provenance: {
+          temperature: temperatureProvenance,
+          precipitation: precipitationProvenance,
+          inflation_rate: inflationProvenance,
+          crop_yield: "synthetic",
+          fuel_price: "synthetic",
+          transport_cost: "estimated",
+          food_price_index: "synthetic",
+          shortage_risk_score: "synthetic"
+        }
       });
     });
     
@@ -1434,6 +1473,7 @@ async function fetchAndCalibrateCustomRegion(regionName) {
     }
     
     // Hide status and loading overlay
+    statusText.textContent = "Calibrated with observed weather/CPI, estimated fallback values, and synthetic agro-economic fields.";
     statusDiv.style.display = "none";
     inputEl.value = "";
     
@@ -1457,9 +1497,10 @@ function parseWorldBankInflation(res) {
   const inflationMap = {};
   if (res && res.length > 1 && Array.isArray(res[1])) {
     res[1].forEach(item => {
-      const year = parseInt(item.date);
+      const year = Number(item.date);
       const val = item.value;
-      if (year && val !== null && val !== undefined) {
+      if (Number.isInteger(year) && year >= 2021 && year <= 2025 &&
+          typeof val === "number" && Number.isFinite(val) && val >= -100 && val <= 100) {
         inflationMap[year] = val;
       }
     });
@@ -1480,10 +1521,10 @@ function aggregateWeatherToMonthly(dailyData) {
     if (!monthly[yearMonth]) {
       monthly[yearMonth] = { temps: [], precips: [] };
     }
-    if (temps[i] !== null && temps[i] !== undefined) {
+    if (typeof temps[i] === "number" && Number.isFinite(temps[i]) && temps[i] >= -100 && temps[i] <= 100) {
       monthly[yearMonth].temps.push(temps[i]);
     }
-    if (precips[i] !== null && precips[i] !== undefined) {
+    if (typeof precips[i] === "number" && Number.isFinite(precips[i]) && precips[i] >= 0 && precips[i] <= 1000) {
       monthly[yearMonth].precips.push(precips[i]);
     }
   }
@@ -1528,7 +1569,8 @@ function createCustomUIElements(region) {
           </div>
         </div>
         <div class="card-foot">
-          <i class="fa-solid fa-circle-nodes"></i> Custom calibrated region
+          <i class="fa-solid fa-circle-nodes"></i>
+          <span title="Green: observed; amber: estimated; red: synthetic">Data: observed weather/CPI; estimated fallback; synthetic yield/fuel/price/risk</span>
         </div>
       </div>
     `;

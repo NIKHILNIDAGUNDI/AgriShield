@@ -168,7 +168,18 @@ def train_and_evaluate():
             train_loss += loss.item() * batch_X.size(0)
             
         train_loss /= len(train_loader.dataset)
-        epoch_logs.append({"epoch": epoch, "train_loss": float(train_loss), "val_loss": float(train_loss)})
+
+        model_val.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for batch_X, batch_y_price, batch_y_risk in test_loader:
+                batch_X, batch_y_price, batch_y_risk = batch_X.to(device), batch_y_price.to(device), batch_y_risk.to(device)
+                pred_price, pred_risk = model_val(batch_X)
+                loss = criterion(pred_price, batch_y_price) + criterion(pred_risk, batch_y_risk)
+                val_loss += loss.item() * batch_X.size(0)
+        val_loss /= len(test_loader.dataset)
+
+        epoch_logs.append({"epoch": epoch, "train_loss": float(train_loss), "val_loss": float(val_loss)})
         
     # Validation evaluation predictions
     model_val.eval()

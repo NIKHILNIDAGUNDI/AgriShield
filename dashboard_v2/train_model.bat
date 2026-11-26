@@ -5,14 +5,22 @@ echo ====================================================================
 echo Ingesting data, building PyTorch tensors, and training on local RTX GPU...
 echo.
 
-:: Run training script using UV package manager
-uv run --with pandas --with numpy --with scikit-learn --with torch train_deep_learning.py
+:: Install exact pinned dependencies
+python -m pip install -r requirements.txt
+if %errorlevel% neq 0 (
+    echo [ERROR] Pinned dependency installation failed.
+    pause
+    exit /b 1
+)
+
+python train_deep_learning.py
 
 if %errorlevel% neq 0 (
     echo.
     echo [ERROR] Training failed. Retrying with PyTorch CUDA index source...
     echo.
-    uv run --index-url https://download.pytorch.org/whl/cu121 --with pandas --with numpy --with scikit-learn --with torch train_deep_learning.py
+    python -m pip install --index-url https://download.pytorch.org/whl/cu121 torch==2.12.1
+    python train_deep_learning.py
 )
 
 echo.
