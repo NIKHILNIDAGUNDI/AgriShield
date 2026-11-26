@@ -1,8 +1,5 @@
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const { applyDeepLearningFallback } = require("../dashboard_fallback.js");
-const vm = require("node:vm");
 
 const ids = [
   "dl-uninitialized-card",
@@ -24,23 +21,8 @@ const document = {
   },
 };
 
-const dashboardDir = path.resolve(__dirname, "..");
-const context = {
-  document,
-  console: { log() {}, error() {} },
-  fetch: () => Promise.reject(new Error("training results unavailable")),
-  AgriShieldDashboardFallback: { applyDeepLearningFallback },
-};
-vm.createContext(context);
-vm.runInContext(
-  fs.readFileSync(path.join(dashboardDir, "app.js"), "utf8"),
-  context,
-  { filename: "app.js" }
-);
-
-async function testFailedResultsFetchFallsBackToBrowserModel() {
-  context.loadDeepLearningResults();
-  await new Promise(resolve => setImmediate(resolve));
+function testBrowserModelFallback() {
+  applyDeepLearningFallback(document);
 
   assert.equal(elements["dl-uninitialized-card"].style.display, "block");
   for (const id of [
@@ -55,10 +37,7 @@ async function testFailedResultsFetchFallsBackToBrowserModel() {
     elements["terminal-model-name"].textContent,
     "Model: RF regressor (in-browser)"
   );
-  console.log("dashboard fallback integration tests passed");
+  console.log("dashboard fallback tests passed");
 }
 
-testFailedResultsFetchFallsBackToBrowserModel().catch(error => {
-  console.error(error);
-  process.exitCode = 1;
-});
+testBrowserModelFallback();

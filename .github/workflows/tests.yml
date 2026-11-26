@@ -32,6 +32,14 @@ jobs:
         with:
           node-version: 20
 
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: dashboard_v2/frontend
+
+      - name: Build React frontend
+        run: npm run build
+        working-directory: dashboard_v2/frontend
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
@@ -45,10 +53,7 @@ jobs:
 
       - name: Check JavaScript syntax
         run: |
-          node --check dashboard_v2/app.js
           node --check dashboard_v2/dashboard_fallback.js
 
       - name: Run Node.js tests
-        run: |
-          node dashboard_v2/tests/test_app_parsing.js
-          node dashboard_v2/tests/test_dashboard_fallback.js
+        run: node dashboard_v2/tests/test_dashboard_fallback.js

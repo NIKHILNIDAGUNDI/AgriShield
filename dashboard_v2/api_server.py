@@ -579,6 +579,9 @@ def make_server(
     dashboard_root = Path(dashboard_root).resolve()
     if not dashboard_root.is_dir():
         raise RuntimeError(f"Dashboard root does not exist or is not a directory: {dashboard_root}")
+    static_root = dashboard_root / "dist"
+    if not (static_root / "index.html").is_file():
+        static_root = dashboard_root
     api = AgriShieldAPI(
         root=dashboard_root,
         artifact_key=artifact_key,
@@ -588,7 +591,7 @@ def make_server(
     handler = type(
         "ConfiguredAgriShieldRequestHandler",
         (AgriShieldRequestHandler,),
-        {"api": api, "dashboard_root": dashboard_root},
+        {"api": api, "dashboard_root": static_root},
     )
     return ThreadingHTTPServer((host, port), handler)
 

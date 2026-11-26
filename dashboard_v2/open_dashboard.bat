@@ -1,4 +1,4 @@
 @echo off
-echo Opening Agri-Shield Dashboard in your default web browser...
-start index.html
-exit
+cd /d "%~dp0frontend"
+if errorlevel 1 exit /b 1
+npm run dev -- --open
