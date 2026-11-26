@@ -1,6 +1,7 @@
 """Versioned model artifact persistence with integrity verification."""
 
 import hashlib
+import io
 import json
 import os
 import uuid
@@ -39,7 +40,11 @@ def _restore_scaler(metadata):
 def _write_json_atomic(path, payload):
     temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        temporary_path.write_text(json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+        temporary_path.write_text(
+            json.dumps(payload, indent=2, allow_nan=False) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
         os.replace(temporary_path, path)
     finally:
         temporary_path.unlink(missing_ok=True)
@@ -54,9 +59,14 @@ def save_model_artifact(model, weights_path, manifest_path, feature_names,
     weights_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
+    weights_buffer = io.BytesIO()
+    torch.save(
+        {name: value.detach().cpu() for name, value in model.state_dict().items()},
+        weights_buffer,
+    )
     temporary_path = weights_path.with_name(f".{weights_path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        torch.save({name: value.detach().cpu() for name, value in model.state_dict().items()}, temporary_path)
+        temporary_path.write_bytes(weights_buffer.getvalue())
         os.replace(temporary_path, weights_path)
     finally:
         temporary_path.unlink(missing_ok=True)

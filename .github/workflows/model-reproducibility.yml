@@ -35,8 +35,8 @@ jobs:
       - name: Train twice with bounded epochs
         working-directory: dashboard_v2
         run: |
-          python train_deep_learning.py --csv ../food_security_data.csv --output-dir .ci-model-repro/run-1 --epochs 2
-          python train_deep_learning.py --csv ../food_security_data.csv --output-dir .ci-model-repro/run-2 --epochs 2
+          python train_deep_learning.py --csv ../food_security_data.csv --output-dir .ci-model-repro/run-1 --epochs 2 --model-version ci-repro
+          python train_deep_learning.py --csv ../food_security_data.csv --output-dir .ci-model-repro/run-2 --epochs 2 --model-version ci-repro
 
       - name: Verify results, artifact contract, and reproducibility
         working-directory: dashboard_v2
@@ -51,7 +51,7 @@ jobs:
           for run_name in ("run-1", "run-2"):
               output = base / run_name
               results = json.loads((output / "train_results.json").read_text(encoding="utf-8"))
-              manifest_path = output / "pytorch_food_security_model.manifest.json"
+              manifest_path = output / "pytorch_food_security_model.ci-repro.manifest.json"
               manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
               required_results = {

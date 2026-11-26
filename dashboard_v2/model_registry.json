@@ -9,7 +9,7 @@
     "1.0.0": {
       "version": "1.0.0",
       "manifest": "pytorch_food_security_model.manifest.json",
-      "manifest_sha256": "71f3aea56b46d135182d865facf213851bf2cc6a9aa1738a60b1304cbcff7d15"
+      "manifest_sha256": "b8c58a044f5b79fd1bce64eae69358114576851a8953170aaf4ea8ba4e281133"
     }
   }
 }
