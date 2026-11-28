@@ -28,14 +28,16 @@ flowchart LR
 
 ## Data pipeline
 
-The workflow ingests and consolidates multiple signals into a single forecasting dataset:
+The notebooks build `food_security_data.csv` (180 monthly rows: US, Ukraine, India, 2021 to 2025). **Most of it is synthetic, including both prediction targets.**
 
-- weather variables such as temperature and precipitation
-- inflation and CPI signals from macroeconomic data sources
-- regional and qualitative risk conditions
-- food-price index and shortage-risk ground truth values
+| Columns | Origin in the committed CSV |
+| --- | --- |
+| `food_price_index`, `shortage_risk_score` (targets) | **Synthetic.** Hand-written formulas over the other columns, plus random noise. They are not observed ground truth. |
+| `crop_yield`, `fuel_price`, `transport_cost`, `geopolitical_risk`, `news_sentiment` | **Synthetic.** Region and year profiles, simulated shocks and random noise. |
+| `temperature`, `precipitation` | **US: synthetic** seasonal profile (it matches the notebook's fallback formula). Ukraine and India do not match the fallback formula, consistent with the notebook's Open-Meteo fetch. |
+| `inflation_rate` | Annual values from the notebook's World Bank CPI fetch, held constant within each year. US 2025 equals the notebook's 2.5 default. |
 
-These inputs are engineered into time-aware feature sets and used to train predictive models for future price and risk outcomes.
+The committed CSV carries no per-value provenance, so the origin above is inferred from the notebook code and the values. The models therefore mostly learn to reproduce a simulation. Do not read the scores below as real-world forecasting skill.
 
 ## Machine learning approach
 
@@ -46,22 +48,18 @@ The repository evaluates multiple modeling strategies for two forecasting object
 
 The project includes a Random Forest baseline and a neural-network approach, with the objective of comparing standard and advanced forecasting methods under the same feature pipeline.
 
-## Verified model results
+## Model results
 
-The current model outputs in `dashboard_v2/train_results.json` show the following validation metrics from the execution run available in the repo:
+Values from `dashboard_v2/train_results.json`: unweighted means over four grouped walk-forward folds, on the largely synthetic data described above.
 
 | Model | Target | RMSE | R² |
 | --- | --- | ---: | ---: |
-| Random Forest | Price forecast | 19.15 | 0.7997 |
-| PyTorch / MLP | Price forecast | 18.39 | 0.8154 |
-| Random Forest | Shortage risk | 5.57 | 0.7874 |
-| PyTorch / MLP | Shortage risk | 4.83 | 0.8397 |
+| Random Forest | Price forecast | 25.20 | 0.586 |
+| PyTorch / MLP | Price forecast | 25.65 | 0.576 |
+| Random Forest | Shortage risk | 7.99 | 0.535 |
+| PyTorch / MLP | Shortage risk | 6.97 | 0.571 |
 
-These results are based on the training artifacts present in the repository and should be interpreted as project evidence, not as an externally benchmarked production claim.
-
-## GPU acceleration note
-
-The repo includes RAPIDS-oriented tooling and GPU-capable design patterns for acceleration. In the model execution artifact currently committed to the project, the reported device was `cpu` and `gpu_model` was `None`, so the GPU acceleration is treated as a design feature and tooling path rather than a verified local GPU runtime result in this environment.
+The neural network is slightly worse than the Random Forest on price and better on shortage risk. The committed run used the CPU (`device: cpu`). The dashboard reads these values from `/v1/metrics`.
 
 ## Tech stack
 
@@ -70,9 +68,9 @@ The repo includes RAPIDS-oriented tooling and GPU-capable design patterns for ac
 - pandas / NumPy
 - scikit-learn
 - PyTorch
-- NVIDIA RAPIDS (cuDF, cuML)
+- React, TypeScript, Vite, Recharts
 - matplotlib
-- weather and CPI data ingestion
+- Open-Meteo and World Bank data ingestion
 
 ## Project status
 
@@ -83,6 +81,24 @@ This project is best understood as a research and prototype system focused on ap
 1. Open the notebooks in the repository root to inspect the data pipeline and modeling workflow.
 2. Install the required Python packages for the notebook and training environment.
 3. Run the forecasting pipeline or dashboard notebook to reproduce the analysis.
+
+### Dashboard frontend
+
+The React app lives in `dashboard_v2/frontend` and needs Node.js 22.12+. Install the Python dependencies first (`pip install -r dashboard_v2/requirements.txt`), then:
+
+```powershell
+cd dashboard_v2/frontend
+npm ci
+npm run dev        # starts the API on :8000 and Vite on :5173
+npm run build      # writes dashboard_v2/dist, which the API server serves
+npm run typecheck
+npm run lint
+npm test           # unit tests (Vitest)
+```
+
+For the browser check, install Playwright (`pip install playwright && playwright install chromium`), build the frontend, then run `python dashboard_v2/tests/e2e_dashboard.py` from the repository root. It is not part of CI.
+
+The scenario simulator starts from the selected region's latest three months. Temperature is a shift in °C and precipitation a percentage change, both applied to the latest reading; the other sliders start at the latest values. Unchanged sliders therefore send real history to the model. Because that history ends one month later than the inputs behind the March 2026 outlook, the simulator forecasts April 2026.
 
 ### Dashboard ML package
 
@@ -111,12 +127,12 @@ python api_server.py
 ```
 
 Open `http://127.0.0.1:8000/`. The versioned API exposes `GET /v1/health`,
-`POST /v1/predict`, `GET /v1/models`, `GET /v1/audit`, and `GET /v1/monitoring`.
+`GET /v1/metrics`, `POST /v1/predict`, `GET /v1/models`, `GET /v1/audit`, and `GET /v1/monitoring`.
 The dashboard uses
 the API for startup forecasts, custom-region recalculation, and simulator
-predictions. If the service is unreachable, it explicitly switches to the
-existing in-browser pipeline. Opening `index.html` directly therefore remains
-available as an offline fallback.
+predictions. If prediction requests fail, it labels itself "Static fallback"
+and uses simple in-browser estimates. The built app must be served over HTTP;
+opening the HTML file directly is not supported.
 
 `model_registry.json` persistently selects the active model version and binds
 its artifact manifest by SHA-256. With no `AGRISHIELD_ARTIFACT_KEY`, this
@@ -236,9 +252,6 @@ Run the API unit tests from `dashboard_v2`:
 ```powershell
 python -m unittest discover -s tests -p "test_*.py"
 ```
-
-Run the dashboard JavaScript checks with `node tests/test_app_parsing.js`,
-`node tests/test_dashboard_fallback.js`, and `node tests/test_api_client.js`.
 
 ## Limitations and future work
 

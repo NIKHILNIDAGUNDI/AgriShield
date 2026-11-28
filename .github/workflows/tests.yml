@@ -30,10 +30,18 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "22"
 
       - name: Install frontend dependencies
         run: npm ci
+        working-directory: dashboard_v2/frontend
+
+      - name: Lint React frontend
+        run: npm run lint
+        working-directory: dashboard_v2/frontend
+
+      - name: Test React frontend
+        run: npm test
         working-directory: dashboard_v2/frontend
 
       - name: Build React frontend
@@ -50,10 +58,3 @@ jobs:
 
       - name: Run Python unit tests
         run: python -m unittest discover -s dashboard_v2/tests -p "test_*.py" -v
-
-      - name: Check JavaScript syntax
-        run: |
-          node --check dashboard_v2/dashboard_fallback.js
-
-      - name: Run Node.js tests
-        run: node dashboard_v2/tests/test_dashboard_fallback.js

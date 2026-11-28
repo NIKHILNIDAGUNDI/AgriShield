@@ -30,3 +30,10 @@ export type ApiModels = {
   active_model_version: string
   models: Array<{ version: string; active: boolean; verification: string }>
 }
+
+type MetricName = `${'rf' | 'torch'}_${'price' | 'risk'}_${'rmse' | 'r2'}`
+
+export type TrainingMetrics = {
+  metrics: Record<MetricName, number>
+  validation?: { n_splits?: number | null }
+}

@@ -155,6 +155,19 @@ class AgriShieldAPI:
             "active_model_version": self.model_version,
         }
 
+    def metrics(self):
+        """Return the validation metrics recorded by the latest training run."""
+        results = json.loads((self.root / "train_results.json").read_text(encoding="utf-8"))
+        validation = results.get("validation") or {}
+        return {
+            "api_version": API_VERSION,
+            "metrics": results["metrics"],
+            "validation": {
+                "strategy": validation.get("strategy"),
+                "n_splits": validation.get("n_splits"),
+            },
+        }
+
     def models(self):
         entries = []
         for version, model in self.registry.get("models", {}).items():
@@ -523,6 +536,11 @@ class AgriShieldRequestHandler(SimpleHTTPRequestHandler):
             return self._send_json(200, self.api.health())
         if path == "/v1/models":
             return self._send_json(200, self.api.models())
+        if path == "/v1/metrics":
+            try:
+                return self._send_json(200, self.api.metrics())
+            except (OSError, ValueError, KeyError):
+                return self._send_json(404, {"error": "Validation metrics are not available"})
         if path == "/v1/audit":
             limit = parse_qs(parsed.query).get("limit", ["100"])[0]
             try:
@@ -537,8 +555,17 @@ class AgriShieldRequestHandler(SimpleHTTPRequestHandler):
                 return self._send_json(400, {"error": str(error)})
         if path.startswith("/v1/"):
             return self._send_json(404, {"error": "Unknown API route"})
-        self.path = path
         return super().do_GET()
+
+    def send_head(self):
+        """Guard static GET and HEAD requests: only the built frontend is ever served."""
+        if not (Path(self.directory) / "index.html").is_file():
+            self.send_error(503, "Frontend build is missing; run npm run build")
+            return None
+        return super().send_head()
+
+    def list_directory(self, path):
+        self.send_error(404, "Not found")
 
     def do_POST(self):
         if urlsplit(self.path).path != "/v1/predict":
@@ -579,9 +606,13 @@ def make_server(
     dashboard_root = Path(dashboard_root).resolve()
     if not dashboard_root.is_dir():
         raise RuntimeError(f"Dashboard root does not exist or is not a directory: {dashboard_root}")
+    # Never fall back to dashboard_root: it holds source, logs, and model weights.
     static_root = dashboard_root / "dist"
     if not (static_root / "index.html").is_file():
-        static_root = dashboard_root
+        LOGGER.warning(
+            "Frontend build not found; static requests will return 503",
+            extra={"event": "static_build_missing"},
+        )
     api = AgriShieldAPI(
         root=dashboard_root,
         artifact_key=artifact_key,

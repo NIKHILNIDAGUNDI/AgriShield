@@ -174,7 +174,8 @@ export default function PromptBar({
   const [pressed, setPressed] = useState(false);
 
   const model = models.find(m => m.key === modelKey) ?? models[0];
-  const token = dismissed ? null : parseToken(draft);
+  const parsed = dismissed ? null : parseToken(draft);
+  const token = parsed && (parsed.kind === 'at' ? sources : commands).length ? parsed : null;
   const open = plusOpen ? 'at' : (token?.kind ?? (modelOpen ? 'model' : effortOpen ? 'effort' : null));
   const query = plusOpen ? '' : (token?.query ?? '');
   const list = useMemo(() => {
@@ -620,23 +621,25 @@ export default function PromptBar({
         />
 
         <div className="prompt-bar__bar">
-          <button
-            type="button"
-            className="prompt-bar__tool"
-            aria-label="Add files and sources"
-            aria-expanded={plusOpen}
-            data-on={plusOpen ? '' : undefined}
-            onMouseDown={e => e.preventDefault()}
-            onClick={() => {
-              setModelOpen(false);
-              setEffortOpen(false);
-              setActive(0);
-              setPlusOpen(v => !v);
-              focusInput();
-            }}
-          >
-            <HugeiconsIcon icon={PlusSignIcon} size={16} strokeWidth={2} />
-          </button>
+          {sources.length > 0 ? (
+            <button
+              type="button"
+              className="prompt-bar__tool"
+              aria-label="Add files and sources"
+              aria-expanded={plusOpen}
+              data-on={plusOpen ? '' : undefined}
+              onMouseDown={e => e.preventDefault()}
+              onClick={() => {
+                setModelOpen(false);
+                setEffortOpen(false);
+                setActive(0);
+                setPlusOpen(v => !v);
+                focusInput();
+              }}
+            >
+              <HugeiconsIcon icon={PlusSignIcon} size={16} strokeWidth={2} />
+            </button>
+          ) : null}
           {models.length > 0 ? (
             <button
               type="button"

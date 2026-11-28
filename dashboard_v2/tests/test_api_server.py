@@ -2,7 +2,9 @@ import hashlib
 import hmac
 import json
 import math
+import shutil
 import sys
+import tempfile
 import threading
 import unittest
 from copy import deepcopy
@@ -151,6 +153,40 @@ class APIServiceTests(unittest.TestCase):
             thread.join(timeout=5)
             server.server_close()
 
+    def test_source_logs_and_weights_are_not_served_without_dist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "dashboard"
+            shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(
+                "dist", "frontend", "tests", "__pycache__", "*.jsonl"
+            ))
+            server = make_server(
+                host="127.0.0.1", port=0, artifact_key="",
+                audit_path=root / "audit.jsonl", dashboard_root=root,
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://127.0.0.1:{server.server_address[1]}"
+                self.assertTrue((root / "api_server.py").is_file())
+                self.assertTrue((root / "audit.jsonl").is_file())
+                paths = (
+                    "/", "/api_server.py", "/audit.jsonl", "/model_registry.json",
+                    "/pytorch_food_security_model.pth", "/%2e%2e/api_server.py",
+                )
+                for path in paths:
+                    for method in ("GET", "HEAD"):
+                        with self.subTest(path=path, method=method):
+                            with self.assertRaises(HTTPError) as failure:
+                                urlopen(Request(base_url + path, method=method), timeout=5)
+                            self.assertEqual(failure.exception.code, 503)
+                            failure.exception.close()
+                with urlopen(f"{base_url}/v1/health", timeout=5) as response:
+                    self.assertEqual(response.status, 200)
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
+                server.server_close()
+
     def test_registry_digest_and_keyed_signature_verification(self):
         registry = json.loads((ROOT / "model_registry.json").read_text(encoding="utf-8"))
         manifest_path = ROOT / registry["models"][registry["active_model"]]["manifest"]
@@ -177,6 +213,12 @@ class APIServiceTests(unittest.TestCase):
         finally:
             self.api.artifact_key = old_key
             self.api.require_hmac = old_require_hmac
+
+    def test_metrics_come_from_train_results(self):
+        recorded = json.loads((ROOT / "train_results.json").read_text(encoding="utf-8"))
+        response = self.api.metrics()
+        self.assertEqual(response["metrics"], recorded["metrics"])
+        self.assertEqual(response["validation"]["n_splits"], recorded["validation"]["n_splits"])
 
     def test_predict_returns_versioned_audit_metadata_and_persists_record(self):
         result = self.api.predict({"rows": sample_rows(), "forecast_only": True})

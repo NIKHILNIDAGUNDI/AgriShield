@@ -1,4 +1,4 @@
-import type { ApiModels, Forecast, RegionRecord } from '../types'
+import type { ApiModels, Forecast, RegionRecord, TrainingMetrics } from '../types'
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
@@ -12,6 +12,15 @@ export function fetchHealth() {
 
 export function fetchModels() {
   return fetchJson<ApiModels>('/v1/models')
+}
+
+export async function fetchMetrics(): Promise<TrainingMetrics> {
+  try {
+    return await fetchJson<TrainingMetrics>('/v1/metrics')
+  } catch {
+    // Static copy of train_results.json, emitted into dist/ at build time.
+    return fetchJson<TrainingMetrics>('/train_results.json')
+  }
 }
 
 export async function fetchDataset(): Promise<RegionRecord[]> {
